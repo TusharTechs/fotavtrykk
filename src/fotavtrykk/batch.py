@@ -67,7 +67,10 @@ class CompanyRunner:
                     self.registry.roles(org),
                     self.registry.accounts(org),
                     self.registry.subunits(org),
-                    self.site.resolve(org, legal_name, seed),
+                    self.site.resolve(
+                        org, legal_name, seed,
+                        self.registry.identity_bundle(entity_data),
+                    ),
                     return_exceptions=True,
                 )
                 for stage, outcome in zip(("roles", "accounts", "subunits", "website"), results):

@@ -58,12 +58,14 @@ def _flatten(text: str) -> str:
 # `identity_proof` field so a reviewer can re-check exactly how we decided.
 PROOF_KEYWORD = "org_number_labelled_on_page"
 PROOF_BARE = "org_number_on_page"
+PROOF_CORROBORATED = "registry_site_corroborated"
 PROOF_REGISTRY_SITE = "registry_declared_website"
 PROOF_NONE = ""
 
 _PROOF_CONFIDENCE = {
     PROOF_KEYWORD: 1.0,
     PROOF_BARE: 0.97,
+    PROOF_CORROBORATED: 0.93,
     PROOF_REGISTRY_SITE: 0.80,
 }
 

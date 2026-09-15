@@ -41,9 +41,19 @@ from .models import Envelope, Observation, publishable, validate_observation
 # Risk tiers, by how falsifiable the entity claim is.
 TIER_PRIMARY_KEY = "primary_key"   # the source is keyed by the organisation number
 TIER_PROVEN = "proven_on_page"     # an organisation number was found in captured content
+TIER_CORROBORATED = "corroborated"  # an independent registry fact appears on the page
 TIER_INFERRED = "inferred"         # name match, or a handle declared by a verified site
 
-RISKY_TIERS = {TIER_PROVEN, TIER_INFERRED}
+RISKY_TIERS = {TIER_PROVEN, TIER_CORROBORATED, TIER_INFERRED}
+
+# Review effort is finite, so spend it where the evidence is weakest. These are
+# relative sampling weights, not probabilities.
+TIER_WEIGHTS = {
+    TIER_INFERRED: 0.45,      # name match only — the thinnest evidence we publish
+    TIER_CORROBORATED: 0.25,  # an independent registry fact also appears
+    TIER_PROVEN: 0.15,        # the organisation number is on the page
+    TIER_PRIMARY_KEY: 0.15,   # tautological, but keeps the audit honest
+}
 
 LABELLED_BY_MACHINE = "machine"
 LABELLED_BY_ASSISTED = "assisted"
@@ -61,6 +71,8 @@ def risk_tier(observation: Observation) -> str:
         return TIER_PRIMARY_KEY
     if proof.startswith("org_number_") or ":org_number_" in proof:
         return TIER_PROVEN
+    if "registry_site_corroborated" in proof:
+        return TIER_CORROBORATED
     return TIER_INFERRED
 
 
@@ -99,15 +111,26 @@ def sample_queue(
     second reviewer can be given exactly the same rows.
     """
     publishable_pool = [o for o in pool if publishable(o)]
-    risky = [o for o in publishable_pool if risk_tier(o) in RISKY_TIERS]
-    safe = [o for o in publishable_pool if risk_tier(o) == TIER_PRIMARY_KEY]
+    by_tier: dict[str, list[Observation]] = defaultdict(list)
+    for item in publishable_pool:
+        by_tier[risk_tier(item)].append(item)
 
-    want_risky = min(len(risky), int(round(count * risky_fraction)))
-    want_safe = min(len(safe), count - want_risky)
-    # If there are not enough risky rows, backfill rather than under-filling the
-    # audit: the 100-label gate is absolute.
-    if want_risky + want_safe < count:
-        want_safe = min(len(safe), count - want_risky)
+    # Allocate by weight, then redistribute whatever a thin tier cannot fill.
+    # `risky_fraction` still sets the floor for non-tautological rows.
+    quota = {tier: int(round(count * weight)) for tier, weight in TIER_WEIGHTS.items()}
+    risky_floor = int(round(count * risky_fraction))
+    if sum(quota[t] for t in RISKY_TIERS) < risky_floor:
+        quota[TIER_PRIMARY_KEY] = max(0, count - risky_floor)
+
+    allocated = {tier: min(len(by_tier[tier]), quota.get(tier, 0)) for tier in quota}
+    shortfall = count - sum(allocated.values())
+    for tier in (TIER_INFERRED, TIER_CORROBORATED, TIER_PROVEN, TIER_PRIMARY_KEY):
+        if shortfall <= 0:
+            break
+        spare = len(by_tier[tier]) - allocated[tier]
+        take_extra = min(spare, shortfall)
+        allocated[tier] += take_extra
+        shortfall -= take_extra
 
     def take(items: list[Observation], n: int) -> list[Observation]:
         buckets: dict[str, list[Observation]] = defaultdict(list)
@@ -130,7 +153,9 @@ def sample_queue(
             depth += 1
         return chosen
 
-    queue = take(risky, want_risky) + take(safe, want_safe)
+    queue: list[Observation] = []
+    for tier, n in allocated.items():
+        queue.extend(take(by_tier[tier], n))
     return sorted(queue, key=lambda o: _rank(seed, o.id))
 
 

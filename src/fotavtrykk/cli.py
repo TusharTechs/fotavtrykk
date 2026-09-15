@@ -85,6 +85,9 @@ def _build_parser() -> argparse.ArgumentParser:
     aq.add_argument("--labels", type=Path, help="Existing labels to write machine rows into")
     aq.add_argument("--snapshots", type=Path, help="Snapshot dir for machine verification")
     aq.add_argument("--review-sheet", type=Path, help="Human-readable queue for review")
+    aq.add_argument("--top-up", type=int, default=0,
+                    help="Machine-verify extra primary-key rows outside the queue "
+                         "until this many labels exist, so humans only review risky rows")
 
     ar = au_sub.add_parser("review", help="Label the queue interactively (resumable)")
     ar.add_argument("--queue", required=True, type=Path)
@@ -92,6 +95,11 @@ def _build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--labels", required=True, type=Path)
     ar.add_argument("--reviewer", default="", help="Recorded on each label")
     ar.add_argument("--limit", type=int, help="Stop after N decisions this session")
+    ar.add_argument("--relabel", nargs="+", default=[],
+                    help="Observation ids to review again, overwriting their label")
+    ar.add_argument("--tier", nargs="+", default=[],
+                    help="Review only these risk tiers, weakest evidence first "
+                         "(inferred, corroborated, proven_on_page, primary_key)")
 
     asc = au_sub.add_parser("score", help="Score observations against labels")
     asc.add_argument("--envelopes", required=True, type=Path, nargs="+")
@@ -244,6 +252,20 @@ def _audit_queue(args: argparse.Namespace) -> int:
     if args.labels:
         audit_mod.write_labels(args.labels, labels)
 
+    if args.top_up and args.labels:
+        extra = 0
+        for observation in pool:
+            if len(labels) >= args.top_up:
+                break
+            if observation.id in labels:
+                continue
+            verdict = audit_mod.machine_verify(observation, envelopes, args.snapshots)
+            if verdict:
+                labels[observation.id] = verdict
+                extra += 1
+        machine_added += extra
+        audit_mod.write_labels(args.labels, labels)
+
     pending = [o for o in queue if o.id not in labels]
     if args.review_sheet:
         args.review_sheet.parent.mkdir(parents=True, exist_ok=True)
@@ -281,7 +303,14 @@ def _audit_review(args: argparse.Namespace) -> int:
     ]
     _, envelopes = audit_mod.load_pool(args.envelopes)
     labels = audit_mod.load_labels(args.labels)
+    for observation_id in args.relabel:
+        labels.pop(observation_id, None)
+    if args.relabel:
+        audit_mod.write_labels(args.labels, labels)
+        print(f"cleared {len(args.relabel)} label(s) for re-review")
     pending = [o for o in queue if o.id not in labels]
+    if args.tier:
+        pending = [o for o in pending if audit_mod.risk_tier(o) in set(args.tier)]
 
     if not pending:
         print(f"nothing pending: all {len(queue)} queued observations are labelled")

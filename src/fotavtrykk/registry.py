@@ -14,6 +14,7 @@ Two traps are handled explicitly here:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .http import Fetcher, FetchResult
@@ -131,6 +132,7 @@ class RegistryCollector:
             ok("municipality", business.get("kommune") or postal.get("kommune")),
             ok("latest_submitted_accounts", data.get("sisteInnsendteAarsregnskap")),
             ok("registry_website", self._normalise_site(data.get("hjemmeside"))),
+            ok("registry_phone", (data.get("telefon") or "").strip() or None),
         ]
 
         # Employee count is genuinely absent for ~79% of this universe. Say so.
@@ -160,6 +162,21 @@ class RegistryCollector:
             availability=Availability.AVAILABLE, confidence=1.0, evidence_ids=[ev.id],
         ))
         return claims, [ev]
+
+    @staticmethod
+    def identity_bundle(data: dict[str, Any]) -> dict[str, Any]:
+        """Registry facts the website gate can corroborate against.
+
+        These come from a different source than the page, so matching them is
+        evidence independent of the legal-name token match.
+        """
+        address = data.get("forretningsadresse") or data.get("postadresse") or {}
+        return {
+            "legal_name": data.get("navn") or "",
+            "postcode": (address.get("postnummer") or "").strip() or None,
+            "city": (address.get("poststed") or "").strip() or None,
+            "phone": re.sub(r"\D", "", data.get("telefon") or "") or None,
+        }
 
     @staticmethod
     def _address(block: dict[str, Any]) -> str | None:

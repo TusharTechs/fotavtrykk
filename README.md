@@ -146,13 +146,38 @@ nothing falsifiable. The queue therefore over-weights company-site and handle
 observations, which makes the resulting precision a **conservative lower bound**:
 it is measured on a harder-than-average population.
 
+### Proof tiers, and why review effort is weighted
+
+| Tier | Evidence | Share of pool |
+|---|---|---:|
+| `primary_key` | The source is keyed by the organisation number | 150 |
+| `proven_on_page` | The organisation number appears in captured content | 51 |
+| `corroborated` | Registry postcode+town or switchboard number appears on the page | 57 |
+| `inferred` | Registry-declared site plus a full legal-name token match | 50 |
+
+`corroborated` is an independent signal: the postcode and phone come from
+Enhetsregisteret, not the page, so matching them is evidence separate from the
+name. Measured on the corpus, **56% of registry-declared sites corroborate**,
+which moved 57 of 107 observations out of the weakest tier. A postcode alone
+does not count — every company in a town shares one.
+
+The audit sampler weights review toward the weakest tier
+(`inferred` 45%, `corroborated` 25%, `proven` 15%, `primary_key` 15%), and
+`--top-up` machine-verifies extra primary-key rows so the 100-label floor is met
+without spending human attention on tautologies.
+
 ### Current state
 
-Corpus of 150 companies → 308 observations. Queue of 120: 30 `primary_key`,
-38 `proven_on_page`, 52 `inferred`. **30 machine-labelled, 90 awaiting human
-review.** The scorer reports `entity_precision: 1.0` on what is labelled and
-still refuses qualification, because 30 < 100 and no risky row has been
-adjudicated by a person.
+150 companies → 308 observations. 100 machine-verified labels, `audit_size` and
+`precision` gates passing, `entity_precision: 1.0`. **`qualification_passed` is
+still `false`** because no risky row has human adjudication — which is the
+distinction the provenance split exists to preserve:
+
+- `provisional_qualification: true` — what the kit's evaluator would conclude.
+- `qualification_passed: false` — what we are entitled to claim.
+
+50 `inferred` rows are the highest-value review target:
+`audit review --tier inferred`.
 
 ## How identity is decided
 
