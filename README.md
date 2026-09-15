@@ -47,6 +47,8 @@ V1 covers the official foundation and the identity gate.
 | `batch.py` | Orchestration, terminal-envelope guarantee | done |
 | `diff.py` | Reconcile, typed change events, idempotency | done |
 | `snapshots.py` | Snapshot load/save, manifest, content hash | done |
+| `sampling.py` | Stratified selection from the 411,160-company universe | done |
+| `audit.py` | Risk-weighted audit queue, labelling, scoring | done |
 | `connectors/` | Places, NAV jobs, news, YouTube | **not built** |
 | `viewer/` | Static evidence browser | **not built** |
 
@@ -93,6 +95,65 @@ checks that a rerun reports *real* changes, not merely that bytes differ.
 $0.00. Extrapolated to 100 companies: ~475 requests, roughly 24% of the 2,000
 cap, comfortably inside the 45-minute wall and the 10,000ms p95 latency gate.
 
+## The audit set
+
+All 55 external points in the kit's scorer are multiplied by
+`external_qualified`, which needs >=100 labelled observations at >=99.5%
+exact-entity precision. Labels are therefore the critical path: an unlabelled
+connector scores zero.
+
+```bash
+# Pick companies from the frozen universe, weighted toward those with a website.
+uv run fotavtrykk select --universe data/signalpost-universe.jsonl.gz \
+  --count 150 --website-fraction 0.6 --seed audit-corpus-1 \
+  --output data/audit-corpus.jsonl
+
+# Sample a risk-weighted queue and machine-label what is tautological.
+uv run fotavtrykk audit queue --envelopes out/audit-corpus.jsonl --count 120 \
+  --output out/audit/queue.jsonl --labels out/audit/labels.jsonl \
+  --snapshots out/snapshots --review-sheet out/audit/review-sheet.txt
+
+# Label the rest. Resumable; writes after every decision.
+uv run fotavtrykk audit review --queue out/audit/queue.jsonl \
+  --envelopes out/audit-corpus.jsonl --labels out/audit/labels.jsonl --reviewer <name>
+
+uv run fotavtrykk audit score --envelopes out/audit-corpus.jsonl \
+  --labels out/audit/labels.jsonl --report out/audit/report.json
+```
+
+### Labels are separated by how they were produced
+
+An audit exists to catch the identity gate being *wrong*. Re-running the gate's
+own logic over its own output cannot do that — it agrees with itself every time.
+So `labelled_by` is recorded and the scorer gates on it:
+
+| Provenance | Meaning | Counts toward qualification |
+|---|---|---|
+| `machine` | Primary-key lookup, re-checked against the stored payload. A Brreg record from `/enheter/{org}` returning that number involves no inference. | Yes, for `primary_key` rows only |
+| `assisted` | Adjudicated from captured evidence by something other than the gate. | No — signal, not certification |
+| `human` | A person read the evidence and decided. | Yes |
+
+`qualification_passed` requires every **risky** observation to be human-labelled.
+`provisional_qualification` reports what the kit's evaluator would conclude from
+the labels as they stand, which is deliberately the weaker claim.
+
+### Sampling is risk-weighted on purpose
+
+Only **10.9%** of the 411,160-company universe has a website (measured, not
+estimated — the kit's own 1,000-company sample over-represents them at 13.8%).
+A representative observation sample would be ~89% registry rows and would audit
+nothing falsifiable. The queue therefore over-weights company-site and handle
+observations, which makes the resulting precision a **conservative lower bound**:
+it is measured on a harder-than-average population.
+
+### Current state
+
+Corpus of 150 companies → 308 observations. Queue of 120: 30 `primary_key`,
+38 `proven_on_page`, 52 `inferred`. **30 machine-labelled, 90 awaiting human
+review.** The scorer reports `entity_precision: 1.0` on what is labelled and
+still refuses qualification, because 30 < 100 and no risky row has been
+adjudicated by a person.
+
 ## How identity is decided
 
 `site.py` publishes a domain only on one of three proofs, strongest first:
@@ -107,6 +168,12 @@ cap, comfortably inside the 45-minute wall and the 10,000ms p95 latency gate.
 
 Anything weaker is `ambiguous`. Social handles are quarantined unless the site
 itself passed the gate.
+
+**Negative evidence overrides a name match.** If a page declares a valid
+organisation number that is not ours, we abstain regardless of how well the name
+reads — that is exactly how a parent, group or franchise site captures a
+subsidiary. Found by building the audit: the name fallback alone would have
+published such a page.
 
 We deliberately do **not** use the "strip every non-digit from the page and
 substring-match" approach. Concatenating unrelated numbers manufactures false
@@ -149,6 +216,15 @@ subsidiary.
 | Regnskapsregisteret (annual accounts) | Official REST API | NLOD 2.0 | $0 |
 | Company websites | Direct HTTPS, 10s timeout, 1 retry, ≤2MB/page, 2 concurrent per host | Permitted public page | $0 |
 
+**TLS note.** Some Norwegian sites serve an incomplete certificate chain; a
+browser recovers the missing intermediate via the AIA extension, Python does
+not. Two of 56 sites in the corpus failed verification *consistently* while
+serving valid content. Those are retried once without verification and the
+evidence records `tls_verified: false`, so the fallback is visible to a
+reviewer. A chain problem says nothing about which company owns the page, and
+the organisation-number proof still has to pass. Disable with
+`Fetcher(insecure_tls_fallback=False)` if a stricter posture is wanted.
+
 No LLM or third-party paid API is used in V1. Declared third-party spend per
 100-company batch: **$0.00**.
 
@@ -168,8 +244,8 @@ encoding for declared-but-unfetched handles.
 
 ## Next
 
-1. Google Places, NAV job feed, news — the external families that carry the
+1. **Review the 90 pending observations.** This is the critical path — no
+   external connector can score until the audit gate passes.
+2. Google Places, NAV job feed, news — the external families that carry the
    differentiating points.
-2. Hand-label ≥100 observations; the external audit gate depends on it and it is
-   the critical path, since all external points are gated on passing it.
 3. Static evidence viewer.

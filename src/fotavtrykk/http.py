@@ -102,6 +102,7 @@ class FetchResult:
     requests_used: int = 0
     error: str | None = None
     blocked: bool = False
+    tls_verified: bool = True
 
     @property
     def json_ok(self) -> bool:
@@ -119,8 +120,11 @@ class Fetcher:
         timeout: float = DEFAULT_TIMEOUT,
         per_host_concurrency: int = 2,
         retries: int = 1,
+        insecure_tls_fallback: bool = True,
     ) -> None:
         self.budget = budget
+        self.insecure_tls_fallback = insecure_tls_fallback
+        self._insecure_client: httpx.AsyncClient | None = None
         self.snapshot_dir = snapshot_dir
         self.timeout = timeout
         self.retries = retries
@@ -142,6 +146,17 @@ class Fetcher:
     async def __aexit__(self, *exc: object) -> None:
         if self._client:
             await self._client.aclose()
+        if self._insecure_client:
+            await self._insecure_client.aclose()
+
+    def _insecure(self) -> httpx.AsyncClient:
+        if self._insecure_client is None:
+            self._insecure_client = httpx.AsyncClient(
+                timeout=self.timeout, follow_redirects=True, verify=False,
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "nb-NO,nb;q=0.9,en;q=0.8"},
+                limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            )
+        return self._insecure_client
 
     def _host_gate(self, url: str) -> asyncio.Semaphore:
         host = httpx.URL(url).host or ""
@@ -210,10 +225,48 @@ class Fetcher:
                 )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
+                # Many Norwegian sites serve an incomplete certificate chain.
+                # A browser recovers it via the AIA extension; Python does not.
+                # Retry once without verification and record that we did: a TLS
+                # chain problem says nothing about which company owns the page,
+                # and the organisation-number proof still has to pass.
+                if self.insecure_tls_fallback and "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                    recovered = await self._get_insecure(url, headers)
+                    if recovered is not None:
+                        recovered.requests_used += spent
+                        return recovered
                 if attempt < self.retries:
                     await asyncio.sleep(0.5 * (attempt + 1))
 
         return FetchResult(
             url=url, ok=False, status=last_status, retrieved_at=utc_now(),
             requests_used=spent, error=last_error or "unknown fetch failure",
+        )
+
+    async def _get_insecure(self, url: str, headers: dict | None) -> FetchResult | None:
+        """One unverified retry, clearly marked. Returns None if it also fails."""
+        try:
+            self.budget.reserve(1)
+        except BudgetExhausted:
+            return None
+        _record_calls(1)
+        try:
+            async with self._host_gate(url):
+                response = await self._insecure().get(url, headers=headers)
+        except (httpx.TimeoutException, httpx.TransportError):
+            return None
+        redirects = len(response.history)
+        if redirects:
+            self.budget.charge_extra(redirects)
+            _record_calls(redirects)
+        if response.status_code >= 400:
+            return None
+        body = response.content[:MAX_BODY_BYTES]
+        digest = hashlib.sha256(body).hexdigest()
+        self._persist(digest, body)
+        return FetchResult(
+            url=url, ok=True, status=response.status_code, final_url=str(response.url),
+            content=body, text=body.decode(response.encoding or "utf-8", errors="replace"),
+            content_sha256=digest, retrieved_at=utc_now(), requests_used=1 + redirects,
+            tls_verified=False,
         )

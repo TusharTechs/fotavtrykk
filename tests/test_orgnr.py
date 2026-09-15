@@ -68,3 +68,29 @@ class TestNameTokens:
 
     def test_drops_generic_connectors(self):
         assert "og" not in orgnr.name_tokens("Hansen og Sønner AS")
+
+
+class TestNegativeEvidence:
+    """A page naming a different legal entity is not ours, however well the
+    name matches. This is how parent and franchise sites capture subsidiaries."""
+
+    ORG = "923609016"
+
+    def test_a_different_valid_org_number_is_a_conflict(self):
+        found = orgnr.find_conflicting_org_numbers("Org.nr 974 760 673", self.ORG)
+        assert found == ["974760673"]
+
+    def test_our_own_number_is_not_a_conflict(self):
+        assert orgnr.find_conflicting_org_numbers("Org.nr 923 609 016", self.ORG) == []
+
+    def test_invalid_checksums_are_not_conflicts(self):
+        assert orgnr.find_conflicting_org_numbers("Ordrenummer 123 456 789", self.ORG) == []
+
+    def test_a_page_with_no_numbers_has_no_conflict(self):
+        assert orgnr.find_conflicting_org_numbers("Velkommen til oss", self.ORG) == []
+
+    def test_multiple_conflicts_are_all_returned(self):
+        found = orgnr.find_conflicting_org_numbers(
+            "Org.nr 974 760 673 og 810 034 882", self.ORG
+        )
+        assert found == ["810034882", "974760673"]

@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from . import audit as audit_mod
+from . import sampling
 from .batch import DEFAULT_REQUEST_BUDGET, run_batch
 from .diff import diff_snapshots, evidence_complete
 from .orgnr import is_valid, normalise
@@ -61,6 +63,41 @@ def _build_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--current", required=True, type=Path)
     refresh.add_argument("--output", required=True, type=Path, help="JSONL of change events")
     refresh.add_argument("--report", type=Path)
+
+    select = sub.add_parser("select", help="Choose companies from the frozen universe")
+    select.add_argument("--universe", required=True, type=Path)
+    select.add_argument("--count", required=True, type=int)
+    select.add_argument("--output", required=True, type=Path)
+    select.add_argument("--seed", default="fotavtrykk-1")
+    select.add_argument("--website-fraction", type=float,
+                        help="Risk-weighted selection: target share with a website")
+    select.add_argument("--exclude", type=Path, help="JSONL of organisations to keep out")
+
+    au = sub.add_parser("audit", help="Build and score the blind-label audit set")
+    au_sub = au.add_subparsers(dest="audit_command", required=True)
+
+    aq = au_sub.add_parser("queue", help="Sample a risk-weighted audit queue")
+    aq.add_argument("--envelopes", required=True, type=Path, nargs="+")
+    aq.add_argument("--count", type=int, default=120)
+    aq.add_argument("--seed", default="audit-1")
+    aq.add_argument("--risky-fraction", type=float, default=0.75)
+    aq.add_argument("--output", required=True, type=Path)
+    aq.add_argument("--labels", type=Path, help="Existing labels to write machine rows into")
+    aq.add_argument("--snapshots", type=Path, help="Snapshot dir for machine verification")
+    aq.add_argument("--review-sheet", type=Path, help="Human-readable queue for review")
+
+    ar = au_sub.add_parser("review", help="Label the queue interactively (resumable)")
+    ar.add_argument("--queue", required=True, type=Path)
+    ar.add_argument("--envelopes", required=True, type=Path, nargs="+")
+    ar.add_argument("--labels", required=True, type=Path)
+    ar.add_argument("--reviewer", default="", help="Recorded on each label")
+    ar.add_argument("--limit", type=int, help="Stop after N decisions this session")
+
+    asc = au_sub.add_parser("score", help="Score observations against labels")
+    asc.add_argument("--envelopes", required=True, type=Path, nargs="+")
+    asc.add_argument("--labels", required=True, type=Path)
+    asc.add_argument("--report", type=Path)
+    asc.add_argument("--minimum-audit", type=int, default=100)
     return parser
 
 
@@ -155,9 +192,168 @@ def _refresh(args: argparse.Namespace) -> int:
     return 0 if report["qualification_passed"] else 1
 
 
+def _select(args: argparse.Namespace) -> int:
+    exclude = set()
+    if args.exclude and args.exclude.exists():
+        exclude = {str(r.get("organisation_number")) for r in
+                   (json.loads(l) for l in args.exclude.read_text(encoding="utf-8").splitlines() if l.strip())}
+
+    rows = list(sampling.load_universe(args.universe))
+    if args.website_fraction is not None:
+        chosen = sampling.select_risk_weighted(
+            rows, args.count, seed=args.seed,
+            website_fraction=args.website_fraction, exclude=exclude,
+        )
+    else:
+        chosen = sampling.select_representative(rows, args.count, seed=args.seed, exclude=exclude)
+
+    sampling.write_jsonl(args.output, chosen)
+    with_site = sum(1 for r in chosen if r.get("website"))
+    report = {
+        "universe": len(rows),
+        "selected": len(chosen),
+        "seed": args.seed,
+        "with_website": with_site,
+        "with_website_share": round(with_site / len(chosen), 4) if chosen else 0.0,
+        "strata": len({sampling.stratum_key(r) for r in chosen}),
+        "excluded": len(exclude),
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if len(chosen) == args.count else 1
+
+
+def _audit_queue(args: argparse.Namespace) -> int:
+    pool, envelopes = audit_mod.load_pool(args.envelopes)
+    queue = audit_mod.sample_queue(
+        pool, args.count, seed=args.seed, risky_fraction=args.risky_fraction
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        "".join(o.model_dump_json(exclude_none=False) + "\n" for o in queue), encoding="utf-8"
+    )
+
+    labels = audit_mod.load_labels(args.labels) if args.labels else {}
+    machine_added = 0
+    for observation in queue:
+        if observation.id in labels:
+            continue
+        verdict = audit_mod.machine_verify(observation, envelopes, args.snapshots)
+        if verdict:
+            labels[observation.id] = verdict
+            machine_added += 1
+    if args.labels:
+        audit_mod.write_labels(args.labels, labels)
+
+    pending = [o for o in queue if o.id not in labels]
+    if args.review_sheet:
+        args.review_sheet.parent.mkdir(parents=True, exist_ok=True)
+        blocks = [
+            audit_mod.render_for_review(o, envelopes.get(o.organisation_number))
+            for o in pending
+        ]
+        args.review_sheet.write_text(
+            ("\n" + "-" * 78 + "\n").join(blocks) + "\n", encoding="utf-8"
+        )
+
+    tiers: dict[str, int] = {}
+    for observation in queue:
+        tier = audit_mod.risk_tier(observation)
+        tiers[tier] = tiers.get(tier, 0) + 1
+    print(json.dumps({
+        "pool_observations": len(pool),
+        "queued": len(queue),
+        "risk_tiers": dict(sorted(tiers.items())),
+        "machine_labelled": machine_added,
+        "awaiting_human_review": len(pending),
+        "review_sheet": str(args.review_sheet) if args.review_sheet else None,
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _audit_review(args: argparse.Namespace) -> int:
+    """Label pending observations one at a time. Writes after every decision, so
+    a session can be interrupted and resumed without losing work."""
+    from .models import Observation
+
+    queue = [
+        Observation.model_validate_json(line)
+        for line in args.queue.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    _, envelopes = audit_mod.load_pool(args.envelopes)
+    labels = audit_mod.load_labels(args.labels)
+    pending = [o for o in queue if o.id not in labels]
+
+    if not pending:
+        print(f"nothing pending: all {len(queue)} queued observations are labelled")
+        return 0
+
+    print(f"{len(pending)} of {len(queue)} awaiting review "
+          f"({len(labels)} already labelled)\n"
+          "  y = belongs to this exact entity        n = wrong company\n"
+          "  m = right company, metric/value wrong   s = skip\n"
+          "  q = save and quit\n")
+
+    decided = 0
+    for index, observation in enumerate(pending, 1):
+        if args.limit and decided >= args.limit:
+            break
+        print("=" * 78)
+        print(f"[{index}/{len(pending)}]")
+        print(audit_mod.render_for_review(observation, envelopes.get(observation.organisation_number)))
+        try:
+            answer = input("  [y/n/m/s/q] > ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\ninterrupted")
+            break
+        if answer == "q":
+            break
+        if answer == "s" or answer not in {"y", "n", "m"}:
+            continue
+
+        labels[observation.id] = {
+            "id": observation.id,
+            "exact_entity": answer in {"y", "m"},
+            "metric_correct": answer == "y",
+            "sentiment_correct": None,
+            "labelled_by": audit_mod.LABELLED_BY_HUMAN,
+            "labelled_at": audit_mod.utc_now(),
+            "reviewer": args.reviewer or None,
+            "risk_tier": audit_mod.risk_tier(observation),
+        }
+        audit_mod.write_labels(args.labels, labels)  # crash-safe: persist each decision
+        decided += 1
+
+    remaining = sum(1 for o in queue if o.id not in labels)
+    print(f"\n{decided} labelled this session · {len(labels)} total · {remaining} remaining")
+    return 0
+
+
+def _audit_score(args: argparse.Namespace) -> int:
+    pool, _ = audit_mod.load_pool(args.envelopes)
+    labels = audit_mod.load_labels(args.labels)
+    report = audit_mod.score_audit(pool, labels, minimum_audit=args.minimum_audit)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["qualification_passed"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    return _run(args) if args.command == "run" else _refresh(args)
+    if args.command == "run":
+        return _run(args)
+    if args.command == "refresh":
+        return _refresh(args)
+    if args.command == "select":
+        return _select(args)
+    if args.command == "audit":
+        if args.audit_command == "queue":
+            return _audit_queue(args)
+        if args.audit_command == "review":
+            return _audit_review(args)
+        return _audit_score(args)
+    return 2
 
 
 if __name__ == "__main__":

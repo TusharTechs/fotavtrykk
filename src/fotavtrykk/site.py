@@ -97,7 +97,7 @@ class SiteResolver:
 
         proof, span = orgnr.find_org_number_proof(full_text, org)
         if not proof:
-            proof, span = self._name_fallback(legal_name, identity_text, page, result)
+            proof, span = self._name_fallback(org, legal_name, identity_text, page, result)
 
         ev = Evidence(
             id="ev-website",
@@ -109,6 +109,7 @@ class SiteResolver:
             http_status=result.status,
             claim_span=span,
             extraction_method="html_identity_gate_v1",
+            tls_verified=result.tls_verified,
         )
 
         if not proof:
@@ -183,11 +184,18 @@ class SiteResolver:
     # -- identity fallback ----------------------------------------------
 
     def _name_fallback(
-        self, legal_name: str, identity_text: str, page: dict, result: FetchResult
+        self, org: str, legal_name: str, identity_text: str, page: dict, result: FetchResult
     ) -> tuple[str, str | None]:
         """Registry-declared site plus the complete legal-name token set."""
         lowered = page["body_text"].casefold()
         if any(marker in lowered for marker in PARKED_MARKERS):
+            return orgnr.PROOF_NONE, None
+
+        # Negative evidence beats a name match. If the page identifies itself as
+        # a different legal entity, it is not ours however well the name reads.
+        # Found by audit: the name fallback alone would publish a parent or
+        # group site that happens to mention the subsidiary.
+        if orgnr.find_conflicting_org_numbers(page["body_text"], org):
             return orgnr.PROOF_NONE, None
 
         core = set(orgnr.name_tokens(legal_name))

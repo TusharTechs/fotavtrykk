@@ -76,6 +76,7 @@ class Evidence(BaseModel):
     http_status: int | None = None
     claim_span: str | None = None
     extraction_method: str | None = None
+    tls_verified: bool = True
 
 
 class Claim(BaseModel):

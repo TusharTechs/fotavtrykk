@@ -99,6 +99,25 @@ def find_org_number_proof(text: str, expected: str) -> tuple[str, str | None]:
     return PROOF_NONE, None
 
 
+def find_conflicting_org_numbers(text: str, expected: str) -> list[str]:
+    """Valid organisation numbers on the page that are *not* ours.
+
+    Negative evidence. A page that identifies itself as a different legal entity
+    is not our company's site, however well the name matches — that is exactly
+    how a parent, group or franchise site captures a subsidiary. Found by audit:
+    the name-token fallback alone would publish such a page.
+    """
+    want = normalise(expected)
+    flat = _flatten(text)
+    found: set[str] = set()
+    for pattern in (KEYWORD_ORGNR_RE, BARE_ORGNR_RE):
+        for match in pattern.finditer(flat):
+            digits = normalise(match.group(1))
+            if len(digits) == 9 and is_valid(digits) and digits != want:
+                found.add(digits)
+    return sorted(found)
+
+
 def _span(text: str, start: int, end: int, pad: int = 45) -> str:
     """A short, quotable excerpt around the match."""
     excerpt = text[max(0, start - pad) : min(len(text), end + pad)]
