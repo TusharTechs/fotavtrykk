@@ -1,0 +1,27 @@
+[project]
+name = "fotavtrykk"
+version = "0.1.0"
+description = "Registry-anchored, org-number-proven external-first company intelligence for the Signalpost challenge"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx==0.28.1",
+    "pydantic==2.11.7",
+    "selectolax==0.3.30",
+]
+
+[project.scripts]
+fotavtrykk = "fotavtrykk.cli:main"
+
+[dependency-groups]
+dev = ["pytest==8.4.1", "pytest-asyncio==1.0.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fotavtrykk"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
