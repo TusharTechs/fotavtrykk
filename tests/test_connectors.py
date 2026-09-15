@@ -385,3 +385,26 @@ class TestTiering:
                             identity_proof=proof, acquisition_mode="official_api",
                             rights_status="approved")
             assert risk_tier(o) == TIER_CORROBORATED, proof
+
+
+class TestHostConcurrency:
+    """Politeness for unknown hosts, throughput for public APIs."""
+
+    def test_company_sites_stay_polite(self):
+        from fotavtrykk.http import DEFAULT_HOST_CONCURRENCY, HOST_CONCURRENCY
+        assert DEFAULT_HOST_CONCURRENCY == 2
+        assert "nordlys.no" not in HOST_CONCURRENCY
+
+    def test_registry_is_allowed_more_parallelism(self):
+        from fotavtrykk.http import DEFAULT_HOST_CONCURRENCY, HOST_CONCURRENCY
+        assert HOST_CONCURRENCY["data.brreg.no"] > DEFAULT_HOST_CONCURRENCY
+
+    async def test_gate_is_per_host_and_case_insensitive(self):
+        from fotavtrykk.http import Fetcher, RequestBudget
+        async with Fetcher(RequestBudget(10)) as f:
+            a = f._host_gate("https://data.brreg.no/x")
+            b = f._host_gate("https://DATA.BRREG.NO/y")
+            c = f._host_gate("https://lite-firma.no/z")
+            assert a is b
+            assert a is not c
+            assert c._value == 2

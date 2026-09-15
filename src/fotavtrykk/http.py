@@ -23,6 +23,19 @@ USER_AGENT = (
 DEFAULT_TIMEOUT = 10.0
 MAX_BODY_BYTES = 2_000_000
 
+# Per-host parallelism. An arbitrary company website may be a small box, so the
+# default stays deliberately polite. Public APIs built for programmatic use are
+# a different matter: measured against data.brreg.no, ten parallel lookups take
+# 2,527ms at a limit of 2 and 1,078ms at 12, while one isolated call is 760ms —
+# the queue was ours, not theirs. Past ~12 the gain flattens.
+DEFAULT_HOST_CONCURRENCY = 2
+HOST_CONCURRENCY = {
+    "data.brreg.no": 12,
+    "places.googleapis.com": 10,
+    "www.wikidata.org": 6,
+    "pam-stilling-feed.nav.no": 4,
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -159,9 +172,10 @@ class Fetcher:
         return self._insecure_client
 
     def _host_gate(self, url: str) -> asyncio.Semaphore:
-        host = httpx.URL(url).host or ""
+        host = (httpx.URL(url).host or "").casefold()
         if host not in self._host_locks:
-            self._host_locks[host] = asyncio.Semaphore(self._per_host_concurrency)
+            limit = HOST_CONCURRENCY.get(host, self._per_host_concurrency)
+            self._host_locks[host] = asyncio.Semaphore(limit)
         return self._host_locks[host]
 
     def _persist(self, digest: str, body: bytes) -> None:

@@ -26,6 +26,15 @@ DEFAULT_REQUEST_BUDGET = 2_000
 RESERVE_FRACTION = 0.05
 
 
+async def _timed(name: str, coro, sink: dict[str, int]):
+    """Record how long one stage took, so the latency tail can be attributed."""
+    started = time.perf_counter()
+    try:
+        return await coro
+    finally:
+        sink[name] = int((time.perf_counter() - started) * 1000)
+
+
 class CompanyRunner:
     def __init__(
         self, fetcher: Fetcher, run_id: str,
@@ -49,6 +58,7 @@ class CompanyRunner:
         started = utc_now()
         clock = time.perf_counter()
         calls = start_call_counter()
+        timings: dict[str, int] = {}
         claims: list[Claim] = []
         evidence: list[Evidence] = []
         observations: list[Observation] = []
@@ -56,7 +66,8 @@ class CompanyRunner:
         status = "completed"
 
         try:
-            entity_result, entity_data = await self.registry.entity(org)
+            entity_result, entity_data = await _timed(
+                "registry_entity", self.registry.entity(org), timings)
             entity_claims, entity_evidence = self.registry.entity_claims(org, entity_result, entity_data)
             claims += entity_claims
             evidence += entity_evidence
@@ -75,14 +86,16 @@ class CompanyRunner:
 
                 stages = ["roles", "accounts", "subunits", "website"]
                 work = [
-                    self.registry.roles(org),
-                    self.registry.accounts(org),
-                    self.registry.subunits(org),
-                    self.site.resolve(org, legal_name, seed, identity),
+                    _timed("roles", self.registry.roles(org), timings),
+                    _timed("accounts", self.registry.accounts(org), timings),
+                    _timed("subunits", self.registry.subunits(org), timings),
+                    _timed("website", self.site.resolve(org, legal_name, seed, identity), timings),
                 ]
                 if self.places is not None:
                     stages.append("places")
-                    work.append(self.places.collect(org, legal_name, identity, seed))
+                    work.append(_timed(
+                        "places",
+                        self.places.collect(org, legal_name, identity, seed), timings))
 
                 results = await asyncio.gather(*work, return_exceptions=True)
                 site_context: dict = {}
@@ -104,10 +117,12 @@ class CompanyRunner:
                 # Activity runs after the website, reusing the page it fetched.
                 if self.news is not None:
                     try:
-                        news_claims, news_evidence, news_observations = await self.news.collect(
-                            org, site_context.get("url"), site_context.get("html"),
-                            site_context.get("proof"),
-                        )
+                        news_claims, news_evidence, news_observations = await _timed(
+                            "activity",
+                            self.news.collect(
+                                org, site_context.get("url"), site_context.get("html"),
+                                site_context.get("proof"),
+                            ), timings)
                         claims += news_claims
                         evidence += news_evidence
                         observations += news_observations
@@ -159,7 +174,7 @@ class CompanyRunner:
             evidence=evidence,
             observations=observations,
             changes=changes,
-            errors=errors,
+            errors=errors + ([{"stage": "timings", "ms": timings}] if timings else []),
             operations=Operations(
                 requests=calls.requests,
                 runtime_ms=int((time.perf_counter() - clock) * 1000),
@@ -274,6 +289,8 @@ async def run_batch(
         "runtime_ms": int((time.perf_counter() - started) * 1000),
         "p50_ms": _percentile([e.operations.runtime_ms for e in ordered], 50),
         "p95_ms": _percentile([e.operations.runtime_ms for e in ordered], 95),
+        "stage_p95_ms": _stage_percentiles(ordered, 95),
+        "stage_p50_ms": _stage_percentiles(ordered, 50),
         "observations": sum(len(e.observations) for e in ordered),
         "changes": sum(len(e.changes) for e in ordered),
         "material_changes": sum(
@@ -300,6 +317,15 @@ def _fallback_envelope(org: str, run_id: str, exc: BaseException) -> Envelope:
         )],
         errors=[{"stage": "batch", "message": f"{type(exc).__name__}: {exc}"}],
     )
+
+
+def _stage_percentiles(envelopes: list[Envelope], pct: int) -> dict[str, int]:
+    buckets: dict[str, list[int]] = {}
+    for envelope in envelopes:
+        for error in envelope.errors:
+            for stage, ms in (error.get("ms") or {}).items():
+                buckets.setdefault(stage, []).append(int(ms))
+    return {k: _percentile(v, pct) for k, v in sorted(buckets.items())}
 
 
 def _tally(envelopes: list[Envelope]) -> dict[str, int]:
