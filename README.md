@@ -34,6 +34,11 @@ if the envelope count does not match `--expected-count`.
 uv run pytest -q
 ```
 
+Known gaps, measured rather than estimated, are in
+**[LIMITATIONS.md](LIMITATIONS.md)** — including the families that are
+structurally capped on this universe and the parts that are not yet
+human-verified.
+
 ## Status
 
 V1 covers the official foundation and the identity gate.
@@ -205,6 +210,70 @@ labels, `entity_precision: 1.0`, `audit_size` and `precision` passing.
 `qualification_passed` remains **false** until a person adjudicates the risky
 rows — 42 `proven_on_page` and 60 `corroborated` now await review, and both are
 structurally stronger than the tier that was dropped.
+
+## How it works
+
+```mermaid
+flowchart TB
+    IN(["1,000 organisation numbers"]) --> PRIME
+    IN --> ANCHOR
+
+    subgraph PRIME["primed once per batch &mdash; cost shared across every company"]
+        direction LR
+        NAV["NAV vacancy feed<br/><i>~25 requests</i>"]
+        WD["Wikidata P2333<br/><i>~4 requests</i>"]
+    end
+
+    ANCHOR["<b>Brønnøysundregistrene</b><br/>entity · roles · accounts · subunits"]
+    ANCHOR --> GATE
+
+    GATE{"<b>org-number proof gate</b><br/>is this the exact legal entity?"}
+
+    GATE -->|"number labelled on page"| PUB
+    GATE -->|"number anywhere on page"| PUB
+    GATE -->|"registry address or phone on page"| PUB
+    GATE -->|"a different company's number"| ABST
+    GATE -->|"name matches only"| ABST
+
+    ABST["<b>abstain</b><br/>ambiguous · not_available<br/><i>with the reason</i>"]
+
+    PUB["<b>verified identity</b>"]
+    PUB --> EXT
+    PRIME -.-> EXT
+
+    subgraph EXT["external footprint &mdash; each re-proven, never on name"]
+        direction LR
+        PLACES["Google Places<br/><i>domain · phone · address</i>"]
+        NEWS["company activity<br/><i>inherits site proof</i>"]
+        JOBS["job adverts<br/><i>employer.orgnr</i>"]
+        WIKI["Wikidata · Wikipedia<br/><i>P2333</i>"]
+    end
+
+    EXT --> REC
+    ABST --> REC
+
+    REC["<b>reconcile against previous run</b><br/>typed changes · failed source keeps last value"]
+    REC --> SYN["<b>synthesise</b><br/>template over published claims only"]
+    SYN --> OUT(["terminal envelope<br/>claims · evidence · observations · changes · summary"])
+
+    classDef gate fill:#fdf3d8,stroke:#8a6410,stroke-width:2px,color:#000
+    classDef stop fill:#f6e0dd,stroke:#9a2f26,color:#000
+    classDef good fill:#dcece2,stroke:#1f6b45,color:#000
+    class GATE gate
+    class ABST stop
+    class PUB,OUT good
+```
+
+Three things that diagram is meant to make obvious:
+
+1. **Nothing reaches an envelope without passing the gate.** Identity is decided
+   once, from the organisation number, and every external connector re-proves
+   against it rather than trusting a name.
+2. **Abstention is a first-class output**, not a failure path. `ambiguous` and
+   `not_available` carry their reason all the way into the summary.
+3. **The batch-primed sources cost almost nothing per company.** NAV and
+   Wikidata are walked once for the whole batch — 29 requests total — which is
+   why Wikidata could add 15 points of breadth for four requests.
 
 ## The submission artifact
 
