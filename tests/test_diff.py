@@ -285,3 +285,53 @@ class TestAuditCascade:
                    for i in range(5)]
         queue = sample_queue([site, *handles], 3, seed="t", risky_fraction=1.0)
         assert any(o.id == "s" for o in queue)
+
+
+class TestRepresentativeSampling:
+    """A sample that claims to mirror the universe must actually mirror it."""
+
+    @staticmethod
+    def _universe():
+        # 900 plain AS without a website, 100 with, 10 ASA — like the real shape.
+        rows = []
+        for i in range(900):
+            rows.append({"organisation_number": f"{100000000+i}", "legal_form": "AS",
+                         "employees": None, "industry_code": "68.200", "website": ""})
+        for i in range(100):
+            rows.append({"organisation_number": f"{200000000+i}", "legal_form": "AS",
+                         "employees": 10, "industry_code": "47.110", "website": "x.no"})
+        for i in range(10):
+            rows.append({"organisation_number": f"{300000000+i}", "legal_form": "ASA",
+                         "employees": 500, "industry_code": "06.100", "website": "y.no"})
+        return rows
+
+    def test_website_share_tracks_the_universe(self):
+        from fotavtrykk.sampling import select_representative
+        rows = self._universe()
+        picked = select_representative(rows, 200, seed="t")
+        share = sum(1 for r in picked if r.get("website")) / len(picked)
+        assert len(picked) == 200
+        assert abs(share - 110/1010) < 0.05, share
+
+    def test_rare_forms_are_not_over_sampled(self):
+        from fotavtrykk.sampling import select_representative
+        picked = select_representative(self._universe(), 200, seed="t")
+        asa = sum(1 for r in picked if r["legal_form"] == "ASA")
+        assert asa <= 5, asa
+
+    def test_exact_count_is_returned(self):
+        from fotavtrykk.sampling import select_representative
+        for n in (10, 137, 500):
+            assert len(select_representative(self._universe(), n, seed="t")) == n
+
+    def test_selection_is_deterministic(self):
+        from fotavtrykk.sampling import select_representative
+        a = select_representative(self._universe(), 50, seed="t")
+        b = select_representative(self._universe(), 50, seed="t")
+        assert [r["organisation_number"] for r in a] == [r["organisation_number"] for r in b]
+
+    def test_risk_weighted_still_honours_its_target(self):
+        from fotavtrykk.sampling import select_risk_weighted
+        picked = select_risk_weighted(self._universe(), 50, seed="t", website_fraction=0.6)
+        share = sum(1 for r in picked if r.get("website")) / len(picked)
+        assert abs(share - 0.6) < 0.1, share

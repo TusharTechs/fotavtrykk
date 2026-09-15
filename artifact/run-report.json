@@ -1,0 +1,69 @@
+{
+  "run_id": "submission-1000-a",
+  "requested": 1000,
+  "emitted_envelopes": 1000,
+  "terminal_states": {
+    "completed": 1000
+  },
+  "requests": 5320,
+  "request_budget": 12000,
+  "third_party_cost_usd": 35.0,
+  "cost_by_provider": {
+    "google_places": 35.0
+  },
+  "connectors": {
+    "nav_jobs": {
+      "pages_walked": 25,
+      "active_candidates": 307,
+      "adverts_fetched": 26,
+      "adverts_resolved": 0,
+      "companies_with_jobs": 0,
+      "window_days": 30,
+      "error": null
+    },
+    "wikidata": {
+      "organisations": 1000,
+      "searches": 20,
+      "entity_fetches": 1,
+      "entities_matched": 8,
+      "requests": 21,
+      "error": null
+    },
+    "google_places": {
+      "enabled": true,
+      "searches": 1000,
+      "published": 386
+    }
+  },
+  "runtime_ms": 240520,
+  "p50_ms": 1980,
+  "p95_ms": 3408,
+  "stage_p95_ms": {
+    "accounts": 1596,
+    "activity": 0,
+    "places": 645,
+    "registry_entity": 1488,
+    "roles": 1557,
+    "subunits": 1628,
+    "website": 1997
+  },
+  "stage_p50_ms": {
+    "accounts": 987,
+    "activity": 0,
+    "places": 567,
+    "registry_entity": 931,
+    "roles": 951,
+    "subunits": 1036,
+    "website": 0
+  },
+  "observations": 1473,
+  "changes": 0,
+  "material_changes": 0,
+  "refreshed_against_previous": false,
+  "validation": {
+    "passed": true
+  },
+  "content_sha256": "10088438140b49d3d08f0f4f04066370b523a5daf404095a80ee39f7fd46310f",
+  "previous_snapshot": null,
+  "expected_count": 1000
+}

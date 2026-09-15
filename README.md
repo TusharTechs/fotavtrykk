@@ -205,6 +205,49 @@ labels, `entity_precision: 1.0`, `audit_size` and `precision` passing.
 rows — 42 `proven_on_page` and 60 `corroborated` now await review, and both are
 structurally stronger than the tier that was dropped.
 
+## The submission artifact
+
+The entry requires **at least 1,000 completed profiles plus their exact
+organisation-number manifest**. Build it with budgets raised: the 2,000-request
+and $10 defaults are sized for the 100-company *daily* batch and would exhaust
+mid-run.
+
+```bash
+uv run fotavtrykk select --universe data/signalpost-universe.jsonl.gz \
+  --count 1000 --seed submission-1 --output data/submission-1000.jsonl
+
+uv run fotavtrykk run --organisations data/submission-1000.jsonl \
+  --output artifact/profiles.jsonl --manifest artifact/manifest.json \
+  --report artifact/run-report.json --expected-count 1000 \
+  --request-budget 12000 --cost-limit 40 --concurrency 12
+```
+
+1,000/1,000 terminal envelopes, all `completed` · 5,320 requests · 4 minutes ·
+p95 3,408ms · 1,473 observations · $35.00. The manifest's organisation list and
+content hash both verify against the profile file.
+
+### Representative, not flattering
+
+The selection mirrors the universe — 10.5% with a website against the real
+10.9%, 93% AS, 86.4% with no employee count, NACE 68 at 21.8%. That matters,
+because coverage measured on the audit corpus was badly optimistic:
+
+| family | audit corpus (60% web) | **representative (10.5% web)** | weight |
+|---|---:|---:|---:|
+| `two_platforms` | 79.3% | **39.3%** | 10 pts |
+| `ratings_reviews` | 75.3% | **38.6%** | 8 pts |
+| `buzz_engagement` | 6.7% | **0.6%** | 7 pts |
+| `workforce_jobs` | 0.0% | **0.0%** | 7 pts |
+
+The daily evaluation draws 100 companies at random from the full universe, so
+**the representative column is the honest expectation**. The audit corpus is
+deliberately over-weighted toward companies with a website and remains the right
+population for measuring *precision* — it is the wrong one for quoting coverage.
+
+Wikidata illustrates the gap sharply: 28% of the audit corpus but **0.8%** of a
+random draw, because Wikidata holds notable companies and the universe is mostly
+dormant holding companies.
+
 ## The viewer
 
 ```bash

@@ -7,3 +7,4 @@ out/
 data/*.csv
 data/*.jsonl.gz
 .DS_Store
+artifact/viewer/

@@ -99,9 +99,44 @@ def _bucket(rows: Iterable[dict], seed: str, exclude: set[str]) -> dict[str, lis
 def select_representative(
     rows: Iterable[dict], count: int, *, seed: str, exclude: Iterable[str] = ()
 ) -> list[dict]:
-    """A stratified sample that mirrors the universe's own shape."""
+    """A stratified sample that mirrors the universe's own shape.
+
+    Allocation is **proportional to each stratum's population**, not one company
+    per stratum. Round-robin across strata weights a stratum holding 189 ASAs
+    the same as one holding 300,000 ASes, which produced a sample that was 46%
+    websites against a universe that is 10.9% — flattering and wrong.
+    """
     buckets = _bucket(rows, seed, set(exclude))
-    return _round_robin(buckets, count)
+    total = sum(len(v) for v in buckets.values())
+    if not total:
+        return []
+
+    # Largest-remainder allocation, so small strata are not rounded out of
+    # existence and the total lands exactly on `count`.
+    exact = {k: len(v) * count / total for k in buckets for v in [buckets[k]]}
+    allocated = {k: min(len(buckets[k]), int(share)) for k, share in exact.items()}
+    remainder = count - sum(allocated.values())
+    for key in sorted(exact, key=lambda k: (-(exact[k] - int(exact[k])), k)):
+        if remainder <= 0:
+            break
+        if allocated[key] < len(buckets[key]):
+            allocated[key] += 1
+            remainder -= 1
+
+    selected: list[dict] = []
+    for key in sorted(buckets):
+        selected.extend(buckets[key][: allocated[key]])
+    # Top up from the largest strata if rounding left us short.
+    if len(selected) < count:
+        chosen = {id(r) for r in selected}
+        for key in sorted(buckets, key=lambda k: -len(buckets[k])):
+            for row in buckets[key]:
+                if len(selected) >= count:
+                    break
+                if id(row) not in chosen:
+                    selected.append(row)
+                    chosen.add(id(row))
+    return selected[:count]
 
 
 def select_risk_weighted(
