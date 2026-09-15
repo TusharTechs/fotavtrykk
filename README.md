@@ -53,8 +53,8 @@ V1 covers the official foundation and the identity gate.
 | `connectors/places.py` | Google Places ratings — **needs an API key** | done, unconfigured |
 | `connectors/news.py` | Dated activity from verified company sites | done |
 | `connectors/wikidata.py` | P2333 exact match, extra platforms, handles | done |
+| `viewer.py` | Static evidence viewer, desktop and mobile | done |
 | `connectors/` | External news mentions, YouTube, sentiment | **not built** |
-| `viewer/` | Static evidence browser | **not built** |
 
 External connectors are where the rubric's differentiating points live. The
 foundation this V1 delivers is table stakes, not a competitive position.
@@ -205,6 +205,30 @@ labels, `entity_precision: 1.0`, `audit_size` and `precision` passing.
 rows — 42 `proven_on_page` and 60 `corroborated` now await review, and both are
 structurally stronger than the tier that was dropped.
 
+## The viewer
+
+```bash
+uv run fotavtrykk viewer --envelopes out/envelopes.jsonl \
+  --report out/run-report.json --output out/viewer/index.html
+```
+
+One self-contained HTML file — no framework, no build step, no network. It shows
+the external footprint beside the registry facts, and for every fact it shows
+**how that fact was proven** and what could not be established.
+
+![Evidence viewer on desktop](docs/viewer-desktop.png)
+
+Worth noting in that screenshot: TOMRA's Facebook, Instagram and LinkedIn
+handles are each marked **confirmed by 2 sources** — found independently on the
+verified company site *and* as a Wikidata P2333 statement. Two independent
+routes agreeing on the same handle is corroboration, so they are merged into one
+row rather than shown twice. `latest post` reads `not available` with a reason
+instead of an empty cell.
+
+Every row stacks on a phone; no element exceeds the viewport at 390px wide.
+
+![Evidence viewer on mobile](docs/viewer-mobile.png)
+
 ## Connectors
 
 Both resolve to the exact legal entity before publishing. Neither will publish
@@ -231,29 +255,48 @@ posting many adverts are accounted for. The connector costs ~25 requests per
 batch shared across all companies and is exact when it does fire, so it earns
 its place on hit-rate, not on population coverage.
 
-### Google Places — built, not yet enabled
+### Google Places — the biggest coverage win, and the only paid dependency
 
 Reaches `ratings_reviews`, which nothing else available can: the registry has no
 ratings and a company's own site cannot supply independent ones.
 
+The key is read from a gitignored `.env` file, so it never reaches shell
+history, the repository or a transcript:
+
 ```bash
-export GOOGLE_PLACES_API_KEY=...
+printf 'GOOGLE_PLACES_API_KEY=your-key\n' > .env && chmod 600 .env
+uv run fotavtrykk places-check --organisations data/audit-corpus.jsonl --limit 3
 ```
 
-Without a key it returns `not_available` with a reason, at zero cost and zero
-requests — never a fabricated blank.
+`places-check` spends about eleven cents proving the key, the identity gate and
+the projected cost before committing a full batch. Without a key the connector
+returns `not_available` with a reason at zero cost — never a fabricated blank.
 
 Places matches on text, so results are candidates. A place is published only
-when an independent registry fact agrees: the place's website resolves to the
-same verified domain, its phone matches the registry switchboard, or its address
-carries the registry postcode and town. Otherwise the claim is `ambiguous`.
+when an **independent registry fact agrees**. Measured across 150 companies:
 
-**Cost warning.** `rating` and `userRatingCount` are in the Enterprise field
-mask, the most expensive SKU. At roughly $0.04 per search that is ~$4.00 per
-100-company batch against a $10 cap — viable but not negligible. Every call is
-charged to a ledger and the connector stops before the cap. Verify the current
-price against your own billing before a paid run; the figure in
-`ESTIMATED_COST_PER_SEARCH_USD` is a documented estimate, not a quote.
+| proof | places |
+|---|---:|
+| `places_website_matches_verified_domain` | 59 |
+| `places_address_matches_registry` | 36 |
+| `places_phone_matches_registry` | 18 |
+| **published** | **113 of 150 (75%)** |
+
+84 of those 113 carry an actual rating; the rest are real places Google holds no
+rating for, which is reported as `not_available` with a reason rather than a
+zero.
+
+**Cost, priced against the published list rather than guessed.** Text Search
+**Enterprise** is $35/1,000 — $0.035 per search — and that is the tier carrying
+`rating`, `userRatingCount`, `websiteUri` and phone. The field mask deliberately
+omits `reviews` and `editorialSummary`, which would push the call into
+Enterprise + Atmosphere at $40/1,000. Text Search has **no** monthly free
+allowance (unlike Place Details), so every search bills.
+
+That is **$3.50 per 100-company batch** against the $10 cap — and roughly **$105
+across daily evaluation to 21 October**. `--places-cost-per-search` overrides the
+declared price and `--cost-limit` sets the batch cap; the ledger stops the
+connector before the cap rather than overrunning it.
 
 ### Dated activity — working, zero namesake risk
 

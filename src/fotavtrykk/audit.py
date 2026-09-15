@@ -53,6 +53,11 @@ RISKY_TIERS = {TIER_PROVEN, TIER_CORROBORATED, TIER_DECLARED, TIER_INFERRED}
 # P2333 is Wikidata's Norwegian organisation number, so a P2333 match is an
 # organisation-number match, not a name one.
 ORG_NUMBER_PROOFS = ("org_number", "p2333")
+# Proofs where an independent registry fact agreed: the registry switchboard,
+# the registry address, or a domain we had already proven. No name is consulted.
+CORROBORATED_PROOFS = ("registry_site_corroborated", "places_phone_matches_registry",
+                       "places_address_matches_registry",
+                       "places_website_matches_verified_domain")
 # Prefixes meaning the fact was declared by a source we already proved, rather
 # than proven directly. A wrong root cascades, so these are audited as a group.
 DECLARED_PREFIXES = ("declared_on_", "published_on_", "wikidata_p2333_sitelink",
@@ -86,7 +91,7 @@ def risk_tier(observation: Observation) -> str:
         return TIER_DECLARED
     if any(token in proof for token in ORG_NUMBER_PROOFS):
         return TIER_PROVEN
-    if "registry_site_corroborated" in proof:
+    if any(token in proof for token in CORROBORATED_PROOFS):
         return TIER_CORROBORATED
     return TIER_INFERRED
 

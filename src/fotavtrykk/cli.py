@@ -104,6 +104,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cost-limit", type=float, default=10.0,
                      help="Third-party spend cap for this batch (USD)")
 
+    vw = sub.add_parser("viewer", help="Build the static evidence viewer")
+    vw.add_argument("--envelopes", required=True, type=Path)
+    vw.add_argument("--report", type=Path)
+    vw.add_argument("--output", required=True, type=Path)
+
     pc = sub.add_parser(
         "places-check",
         help="Validate the Places key with a single search before spending a batch",
@@ -183,6 +188,20 @@ def _build_parser() -> argparse.ArgumentParser:
     asc.add_argument("--report", type=Path)
     asc.add_argument("--minimum-audit", type=int, default=100)
     return parser
+
+
+def _viewer(args: argparse.Namespace) -> int:
+    from . import viewer as viewer_mod
+
+    envelopes = list(load_envelopes(args.envelopes).values())
+    if not envelopes:
+        print(f"no envelopes in {args.envelopes}", file=sys.stderr)
+        return 2
+    report = json.loads(args.report.read_text(encoding="utf-8")) if args.report else {}
+    size = viewer_mod.write(args.output, envelopes, run_report=report)
+    print(json.dumps({"companies": len(envelopes), "output": str(args.output),
+                      "bytes": size}, indent=2))
+    return 0
 
 
 def _places_check(args: argparse.Namespace) -> int:
@@ -700,6 +719,8 @@ def main(argv: list[str] | None = None) -> int:
         return _select(args)
     if args.command == "places-check":
         return _places_check(args)
+    if args.command == "viewer":
+        return _viewer(args)
     if args.command == "audit":
         if args.audit_command == "queue":
             return _audit_queue(args)

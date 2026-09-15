@@ -373,3 +373,15 @@ class TestTiering:
                             identity_proof=proof, acquisition_mode="official_api",
                             rights_status="approved")
             assert risk_tier(o) == TIER_DECLARED, proof
+
+    def test_places_registry_agreement_is_corroborated_not_inferred(self):
+        from fotavtrykk.audit import TIER_CORROBORATED, risk_tier
+        from fotavtrykk.models import Observation
+        for proof in ("places_phone_matches_registry", "places_address_matches_registry",
+                      "places_website_matches_verified_domain"):
+            o = Observation(id="x", organisation_number="1", platform="google_places",
+                            signal_type="place_summary", source_url="https://maps/",
+                            retrieved_at="t", content_sha256="a"*64, exact_entity=True,
+                            identity_proof=proof, acquisition_mode="official_api",
+                            rights_status="approved")
+            assert risk_tier(o) == TIER_CORROBORATED, proof
