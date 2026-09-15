@@ -8,3 +8,5 @@ data/*.csv
 data/*.jsonl.gz
 .DS_Store
 artifact/viewer/
+data/lat.jsonl
+data/pipeline-smoke.jsonl
