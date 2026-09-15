@@ -11,7 +11,7 @@ import asyncio
 import time
 from pathlib import Path
 
-from .connectors import NavJobsSource, PlacesSource
+from .connectors import CompanyNewsSource, NavJobsSource, PlacesSource
 from .diff import reconcile
 from .http import CostLedger, Fetcher, RequestBudget, start_call_counter, utc_now
 from .models import (
@@ -32,6 +32,7 @@ class CompanyRunner:
         previous: dict[str, "Envelope"] | None = None,
         jobs: NavJobsSource | None = None,
         places: PlacesSource | None = None,
+        news: CompanyNewsSource | None = None,
     ) -> None:
         self.fetcher = fetcher
         self.run_id = run_id
@@ -40,6 +41,7 @@ class CompanyRunner:
         self.site = SiteResolver(fetcher)
         self.jobs = jobs
         self.places = places
+        self.news = news
 
     async def run(self, org: str) -> Envelope:
         started = utc_now()
@@ -81,7 +83,10 @@ class CompanyRunner:
                     work.append(self.places.collect(org, legal_name, identity, seed))
 
                 results = await asyncio.gather(*work, return_exceptions=True)
+                site_context: dict = {}
                 for stage, outcome in zip(stages, results):
+                    if stage == "website" and isinstance(outcome, tuple) and len(outcome) > 3:
+                        site_context = outcome[3] or {}
                     if isinstance(outcome, BaseException):
                         errors.append({"stage": stage, "message": f"{type(outcome).__name__}: {outcome}"})
                         claims.append(Claim(
@@ -93,6 +98,19 @@ class CompanyRunner:
                     evidence += outcome[1]
                     if len(outcome) > 2:
                         observations += outcome[2]
+
+                # Activity runs after the website, reusing the page it fetched.
+                if self.news is not None:
+                    try:
+                        news_claims, news_evidence, news_observations = await self.news.collect(
+                            org, site_context.get("url"), site_context.get("html"),
+                            site_context.get("proof"),
+                        )
+                        claims += news_claims
+                        evidence += news_evidence
+                        observations += news_observations
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append({"stage": "activity", "message": f"{type(exc).__name__}: {exc}"})
 
                 # NAV is primed once per batch, so reading it costs nothing here.
                 if self.jobs is not None:
@@ -182,6 +200,7 @@ async def run_batch(
     company_names: dict[str, str] | None = None,
     enable_jobs: bool = True,
     enable_places: bool = True,
+    enable_news: bool = True,
 ) -> tuple[list[Envelope], dict]:
     budget = RequestBudget(limit=request_budget)
     ledger = CostLedger(limit_usd=cost_limit_usd)
@@ -195,8 +214,10 @@ async def run_batch(
             jobs = NavJobsSource(fetcher)
             await jobs.prime(list(company_names.items()))
         places = PlacesSource(fetcher, ledger=ledger) if enable_places else None
+        news = CompanyNewsSource(fetcher) if enable_news else None
 
-        runner = CompanyRunner(fetcher, run_id, previous=previous, jobs=jobs, places=places)
+        runner = CompanyRunner(fetcher, run_id, previous=previous,
+                               jobs=jobs, places=places, news=news)
 
         async def guarded(org: str) -> None:
             async with gate:

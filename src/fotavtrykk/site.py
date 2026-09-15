@@ -85,14 +85,14 @@ class SiteResolver:
             return self._unresolved(
                 Availability.NOT_AVAILABLE,
                 "no website registered in Enhetsregisteret and search discovery is not enabled in v1",
-            ), [], []
+            ), [], [], {}
 
         result = await self.fetcher.get(seed_url)
         if not result.ok:
             state = Availability.BLOCKED if result.blocked else Availability.FAILED
             return self._unresolved(
                 state, f"registry website could not be retrieved: {result.error}",
-            ), [], []
+            ), [], [], {}
 
         page = self._parse(result.text)
         identity_text = " ".join(filter(None, [
@@ -123,7 +123,7 @@ class SiteResolver:
                 Availability.AMBIGUOUS,
                 "registry-declared site lacks exact-entity evidence; not published as verified",
                 value=result.final_url or result.url, confidence=0.5, evidence_ids=[ev.id],
-            ), [ev], []
+            ), [ev], [], {}
 
         confidence = orgnr.proof_confidence(proof)
         claims = [
@@ -184,7 +184,14 @@ class SiteResolver:
                 metrics={"declared_url": handle["url"]},
             ))
 
-        return claims, [ev], [o for o in observations if not validate_observation(o)]
+        # The raw page travels with the result so the activity connector can
+        # reuse it instead of spending another request on the same URL.
+        context = {
+            "url": result.final_url or result.url,
+            "html": result.text,
+            "proof": proof,
+        }
+        return claims, [ev], [o for o in observations if not validate_observation(o)], context
 
     # -- identity fallback ----------------------------------------------
 

@@ -51,7 +51,8 @@ V1 covers the official foundation and the identity gate.
 | `audit.py` | Risk-weighted audit queue, labelling, scoring | done |
 | `connectors/nav_jobs.py` | NAV vacancy feed, org-number verified | done |
 | `connectors/places.py` | Google Places ratings — **needs an API key** | done, unconfigured |
-| `connectors/` | News, YouTube | **not built** |
+| `connectors/news.py` | Dated activity from verified company sites | done |
+| `connectors/` | External news mentions, YouTube, sentiment | **not built** |
 | `viewer/` | Static evidence browser | **not built** |
 
 External connectors are where the rubric's differentiating points live. The
@@ -247,6 +248,39 @@ mask, the most expensive SKU. At roughly $0.04 per search that is ~$4.00 per
 charged to a ledger and the connector stops before the cap. Verify the current
 price against your own billing before a paid run; the figure in
 `ESTIMATED_COST_PER_SEARCH_USD` is a documented estimate, not a quote.
+
+### Dated activity — working, zero namesake risk
+
+Targets `buzz_engagement`. Reads the company's **own** news, press or blog page
+on a site that already passed the organisation-number gate, so identity is
+inherited from that proof: a company writing on its own verified domain is
+unambiguously that company.
+
+Measured on 150 companies: **10 companies, 25 dated posts** — real press
+releases from Vår Energi ASA, Navamedic ASA and others, each with a publication
+date taken from JSON-LD or a dated DOM element. Items without a date are
+dropped, never guessed.
+
+These observations never carry a sentiment label. The source policy is explicit
+that company-owned promotional copy cannot supply an independent sentiment
+claim, so `activity.posts` is marked `sentiment_eligible: false`.
+
+**Google News is not usable.** `news.google.com/robots.txt` is `Disallow: /`
+with an allow-list that excludes `/rss/`, and the file names ClaudeBot and
+anthropic-ai directly. Its article links are Google redirects, which would need
+a second disallowed fetch to resolve. Convenient, but barred by the source
+policy — the same standard that rejected the name-only identity tier.
+
+Two alternatives were measured and are noted for later:
+
+- **GDELT** — free and documented, but throttled to one request per five
+  seconds, which is ~500s of a 45-minute batch for 100 companies, with low yield
+  for small Norwegian firms.
+- **Wikidata** — carries property P2333, the Norwegian organisation number, for
+  **10,311 entities** (7,326 with a website). Exact entity resolution with no
+  namesake risk, and a distinct platform for `two_platforms` breadth. The SPARQL
+  endpoint is `Disallow: /sparql`, but the MediaWiki API
+  (`haswbstatement:P2333=<orgnr>`) is permitted and returns exact matches.
 
 ## How identity is decided
 

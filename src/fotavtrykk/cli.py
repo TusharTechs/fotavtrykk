@@ -74,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--limit", type=int, help="Process only the first N organisations")
     run.add_argument("--no-jobs", action="store_true", help="Skip the NAV vacancy feed")
     run.add_argument("--no-places", action="store_true", help="Skip Google Places")
+    run.add_argument("--no-news", action="store_true", help="Skip company activity pages")
 
     refresh = sub.add_parser(
         "refresh",
@@ -173,6 +174,7 @@ def _run(args: argparse.Namespace) -> int:
         company_names=read_company_names(args.organisations),
         enable_jobs=not args.no_jobs,
         enable_places=not args.no_places,
+        enable_news=not args.no_news,
     ))
 
     content_sha = write_envelopes(args.output, envelopes)

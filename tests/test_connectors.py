@@ -156,3 +156,94 @@ class TestPlaces:
         await src.collect("987654321", "NORDLYS VERKSTED AS", IDENTITY, "https://nordlys.no")
         assert ledger.spent_usd > 0
         assert ledger.by_provider["google_places"] > 0
+
+
+LD_JSON = '''<html><body>
+<script type="application/ld+json">
+{"@type":"NewsArticle","headline":"Ny kontrakt i Nordland",
+ "datePublished":"2026-09-10T08:00:00Z","url":"/nyheter/kontrakt"}
+</script>
+<script type="application/ld+json">
+{"@type":"NewsArticle","headline":"Kvartalstall lagt fram",
+ "datePublished":"2026-08-01T08:00:00Z","url":"/nyheter/q2"}
+</script></body></html>'''
+
+DOM_NEWS = '''<html><body>
+<article><h2>Vi åpner nytt kontor</h2><time datetime="2026-07-04">4. juli 2026</time>
+<a href="/nyheter/kontor">Les mer</a></article>
+<article><h2>Uten dato her</h2><p>Ingen dato oppgitt.</p></article>
+<article><h2>Norsk datoformat</h2><p>Publisert 12. mars 2026 av redaksjonen.</p></article>
+</body></html>'''
+
+HOME = '<html><body><a href="/nyheter">Nyheter</a><a href="/om-oss">Om oss</a></body></html>'
+
+
+class TestCompanyNews:
+    async def test_requires_a_verified_site(self):
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({}))
+        claims, _, observations = await src.collect("987654321", None, None, None)
+        assert observations == []
+        assert all(c.availability is Availability.NOT_AVAILABLE for c in claims)
+
+    async def test_unproven_site_publishes_nothing(self):
+        """Identity is inherited from the site gate; no proof, no posts."""
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({"/nyheter": LD_JSON}))
+        _, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, identity_proof=None)
+        assert observations == []
+
+    async def test_structured_data_posts_are_published_newest_first(self):
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({"/nyheter": LD_JSON}))
+        claims, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, "org_number_labelled_on_page")
+        assert len(observations) == 2
+        assert observations[0].observed_at == "2026-09-10"
+        latest = next(c for c in claims if c.field == "activity.latest_post_date")
+        assert latest.value == "2026-09-10"
+
+    async def test_identity_proof_records_the_inherited_chain(self):
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({"/nyheter": LD_JSON}))
+        _, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, "org_number_labelled_on_page")
+        assert observations[0].identity_proof == (
+            "published_on_verified_company_site:org_number_labelled_on_page")
+        assert observations[0].signal_type == "public_post"
+
+    async def test_company_owned_posts_never_carry_sentiment(self):
+        """The source policy bars company copy as an independent sentiment claim."""
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({"/nyheter": LD_JSON}))
+        claims, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, "org_number_on_page")
+        assert all(o.sentiment_label is None for o in observations)
+        posts = next(c for c in claims if c.field == "activity.posts")
+        assert posts.qualifiers["sentiment_eligible"] is False
+
+    async def test_undated_items_are_dropped_not_guessed(self):
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({"/nyheter": DOM_NEWS}))
+        _, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, "org_number_on_page")
+        titles = [o.evidence_span for o in observations]
+        assert "Uten dato her" not in titles
+        assert len(observations) == 2
+
+    async def test_norwegian_date_format_is_parsed(self):
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({"/nyheter": DOM_NEWS}))
+        _, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, "org_number_on_page")
+        assert {o.observed_at for o in observations} == {"2026-07-04", "2026-03-12"}
+
+    async def test_missing_news_page_is_not_available_not_failed(self):
+        from fotavtrykk.connectors import CompanyNewsSource
+        src = CompanyNewsSource(StubFetcher({}))
+        claims, _, observations = await src.collect(
+            "987654321", "https://firma.no/", HOME, "org_number_on_page")
+        assert observations == []
+        assert all(c.availability is Availability.NOT_AVAILABLE for c in claims)
+        assert "no dated news" in claims[0].note
