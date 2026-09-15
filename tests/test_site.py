@@ -49,13 +49,14 @@ class TestFallbackTiers:
         assert proof == orgnr.PROOF_CORROBORATED
         assert "9008" in span
 
-    def test_name_only_when_nothing_corroborates(self):
+    def test_name_only_abstains(self):
+        """Was PROOF_REGISTRY_SITE until the audit measured that tier at 84%."""
         resolver = SiteResolver(fetcher=None)
         proof, _ = resolver._name_fallback(
             "987654321", IDENTITY["legal_name"],
             "Nordlys Verksted AS", page("Velkommen"), IDENTITY,
         )
-        assert proof == orgnr.PROOF_REGISTRY_SITE
+        assert proof == orgnr.PROOF_NONE
 
     def test_conflicting_org_number_beats_corroboration(self):
         """Negative evidence wins even when the address matches."""
@@ -105,3 +106,43 @@ class TestContactCandidates:
         from fotavtrykk.audit import contact_candidates
         found = contact_candidates("", "https://firma.no/", limit=10)
         assert any(u.endswith("/kontakt") for u in found)
+
+
+class TestAuditDrivenFixes:
+    def test_directional_town_suffix_still_corroborates(self):
+        """Registry files 'KRISTIANSAND S'; the page says 'Kristiansand'."""
+        identity = {"postcode": "4621", "city": "KRISTIANSAND S", "phone": None}
+        found = SiteResolver._corroboration(
+            page("Lumberveien 27, NO-4621 Kristiansand, Norway"), identity)
+        assert found is not None
+
+    def test_wrong_town_still_fails(self):
+        identity = {"postcode": "4621", "city": "KRISTIANSAND S", "phone": None}
+        assert SiteResolver._corroboration(page("4621 Bergen"), identity) is None
+
+    def test_default_hosting_placeholder_is_not_a_profile(self):
+        resolver = SiteResolver(fetcher=None)
+        proof, _ = resolver._name_fallback(
+            "987654321", "FLYBOAT ANS", "flyboat.no",
+            page("flyboat.no Something amazing will be constructed here... "
+                 "To change this page, upload your website into the public_html directory." * 3),
+            {},
+        )
+        assert proof == orgnr.PROOF_NONE
+
+    def test_name_match_alone_no_longer_publishes(self):
+        """Audited at 84% entity precision - below the qualification floor."""
+        resolver = SiteResolver(fetcher=None)
+        proof, _ = resolver._name_fallback(
+            "987654321", "NORDLYS VERKSTED AS", "Nordlys Verksted AS",
+            page("Nordlys Verksted leverer tjenester i hele landet." * 5), {},
+        )
+        assert proof == orgnr.PROOF_NONE
+
+    def test_corroborated_still_publishes(self):
+        resolver = SiteResolver(fetcher=None)
+        proof, _ = resolver._name_fallback(
+            "987654321", "NORDLYS VERKSTED AS", "Nordlys Verksted AS",
+            page("Storgata 1, 9008 Tromsø" * 5), IDENTITY,
+        )
+        assert proof == orgnr.PROOF_CORROBORATED

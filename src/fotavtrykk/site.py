@@ -43,6 +43,10 @@ PRIORITY_PATHS = ("/om-oss", "/kontakt", "/about", "/contact")
 PARKED_MARKERS = (
     "domain is for sale", "domain for sale", "hugedomains", "parked at",
     "this domain may be for sale", "buy this domain", "under construction",
+    # Default hosting pages. The domain may well be the company's, but there is
+    # no profile on it to publish.
+    "something amazing will be constructed", "upload your website",
+    "public_html", "index of /", "welcome to nginx", "apache2 ubuntu default",
 )
 
 
@@ -204,8 +208,12 @@ class SiteResolver:
         if len(phone) >= 8 and phone[-8:] in digits:
             return f"registry switchboard {phone[-8:]} appears on the page"
         postcode, city = identity.get("postcode"), identity.get("city")
-        if postcode and city and postcode in haystack and city.casefold() in haystack.casefold():
-            return f"registry address {postcode} {city} appears on the page"
+        if postcode and city and postcode in haystack:
+            lowered = haystack.casefold()
+            # "KRISTIANSAND S" is filed with a directional suffix the page drops.
+            forms = {city.casefold(), re.sub(r"\s+[a-zæøå]$", "", city.casefold()).strip()}
+            if any(form and form in lowered for form in forms):
+                return f"registry address {postcode} {city} appears on the page"
         return None
 
     def _name_fallback(
@@ -237,7 +245,13 @@ class SiteResolver:
         corroboration = self._corroboration(page, identity)
         if corroboration:
             return orgnr.PROOF_CORROBORATED, corroboration
-        return orgnr.PROOF_REGISTRY_SITE, (page["title"] or identity_text)[:160]
+
+        # A full legal-name token match on a registry-declared site is NOT
+        # sufficient. Audited at 84% exact-entity precision (8 wrong of 50)
+        # against a 99.5% floor: it publishes group and holding sites such as
+        # klaveness.com for a listed subsidiary, and a parent's consumer portal
+        # for the parent. Abstain; the claim becomes `ambiguous`.
+        return orgnr.PROOF_NONE, None
 
     # -- parsing ---------------------------------------------------------
 

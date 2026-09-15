@@ -146,74 +146,55 @@ nothing falsifiable. The queue therefore over-weights company-site and handle
 observations, which makes the resulting precision a **conservative lower bound**:
 it is measured on a harder-than-average population.
 
-### Proof tiers, and why review effort is weighted
+### Proof tiers
 
-| Tier | Evidence | Share of pool |
-|---|---|---:|
-| `primary_key` | The source is keyed by the organisation number | 150 |
-| `proven_on_page` | The organisation number appears in captured content | 51 |
-| `corroborated` | Registry postcode+town or switchboard number appears on the page | 57 |
-| `inferred` | Registry-declared site plus a full legal-name token match | 50 |
+| Tier | Evidence | Published? |
+|---|---|---|
+| `primary_key` | The source is keyed by the organisation number | yes |
+| `proven_on_page` | The organisation number appears in captured content | yes |
+| `corroborated` | Registry postcode+town or switchboard number appears on the page | yes |
+| ~~`inferred`~~ | Registry-declared site plus a legal-name match | **no — abstains** |
 
-`corroborated` is an independent signal: the postcode and phone come from
-Enhetsregisteret, not the page, so matching them is evidence separate from the
-name. Measured on the corpus, **56% of registry-declared sites corroborate**,
-which moved 57 of 107 observations out of the weakest tier. A postcode alone
-does not count — every company in a town shares one.
+`corroborated` is independent evidence: the postcode and phone come from
+Enhetsregisteret, not the page, so matching them is separate from the name.
+56% of registry-declared sites corroborate.
 
-The audit sampler weights review toward the weakest tier
-(`inferred` 45%, `corroborated` 25%, `proven` 15%, `primary_key` 15%), and
-`--top-up` machine-verifies extra primary-key rows so the 100-label floor is met
-without spending human attention on tautologies.
+### The inferred tier was measured and dropped
+
+Adjudicating the 15 registry-declared sites that matched on name alone put that
+tier at **84.0% exact-entity precision (8 wrong of 50 observations)** against a
+99.5% floor. It was publishing group and holding sites:
+
+- `klaveness.com` for **Klaveness Combination Carriers ASA** — the Torvald
+  Klaveness *group* site, whose own navigation lists KCC as one of three
+  companies under Klaveness Holding.
+- `telenor.no/privat` for **Telenor ASA** — the Norwegian consumer retail portal
+  operated by Telenor Norge AS, not the listed holding company's site.
+
+Each wrong site also cascaded to the handles declared on it, so two bad sites
+produced eight bad observations. A name match on a registry-declared site is now
+`ambiguous`, never `available`.
+
+Cost, measured on the same 150 companies: observations 308 → 261 (−15%),
+published websites 57 → 42, `ambiguous` 18 → 34. That is the price of removing a
+tier that fails the precision gate, and it is the right trade under a rubric
+where one wrong-company publication ends qualification.
+
+Two collateral fixes came out of the same review:
+
+- Norwegian postal towns are filed with directional suffixes the page drops
+  (`KRISTIANSAND S` vs `Kristiansand`), which was defeating address
+  corroboration. Fixing it recovered three sites.
+- Default hosting placeholders (`flyboat.no`: *"Something amazing will be
+  constructed here"*) were being published as company profiles.
 
 ### Current state
 
-150 companies → 308 observations. 100 machine-verified labels, `audit_size` and
-`precision` gates passing, `entity_precision: 1.0`. **`qualification_passed` is
-still `false`** because no risky row has human adjudication — which is the
-distinction the provenance split exists to preserve:
-
-- `provisional_qualification: true` — what the kit's evaluator would conclude.
-- `qualification_passed: false` — what we are entitled to claim.
-
-50 `inferred` rows are the highest-value review target — but they are only
-**16 real judgements**. They break down as 16 company sites plus 34 handles, and
-every handle was declared on one of those same 16 sites. A handle is the company
-linking its own profile from its own page, so the site verdict settles it:
-labelling a site cascades to its handles, recorded with `derived_from`.
-
-### How to decide y or n
-
-`audit brief` fetches what a reviewer would otherwise look up by hand — the
-official registry page, the site's own contact and about pages, and whether any
-independent registry fact appears — and `audit review --briefs` prints it inline.
-
-```bash
-uv run fotavtrykk audit brief --queue out/audit/queue.jsonl \
-  --envelopes out/audit-corpus-v4.jsonl --labels out/audit/labels.jsonl \
-  --snapshots out/snapshots --output out/audit/briefs.jsonl
-
-uv run fotavtrykk audit review --queue out/audit/queue.jsonl \
-  --envelopes out/audit-corpus-v4.jsonl --labels out/audit/labels.jsonl \
-  --briefs out/audit/briefs.jsonl --tier inferred --reviewer <name>
-```
-
-Read the brief in this order:
-
-1. **`-> OURS`** on any checked page — the organisation number is on the site.
-   That is decisive. Answer `y`.
-2. **`-> OTHER <number>`** — the site identifies itself as a different legal
-   entity. Open the registry link and check whether that number is the parent.
-   If the site is the group's rather than this company's, answer `n`.
-3. **`corroborated:`** — a registry switchboard or postcode+town appears on the
-   page. Independent of the name, so `y` unless something else looks wrong.
-4. **`UNCLEAR`** — only the registry declaration and the name. Open the registry
-   link and the site side by side and decide whether the site describes *this*
-   entity or a group it belongs to.
-
-The `hint` line is a suggestion, never a label. Briefs are decision support: a
-machine cannot certify its own inference, which is the whole reason these rows
-need a person.
+150 companies → 261 observations, no `inferred` tier. 100 machine-verified
+labels, `entity_precision: 1.0`, `audit_size` and `precision` passing.
+`qualification_passed` remains **false** until a person adjudicates the risky
+rows — 42 `proven_on_page` and 60 `corroborated` now await review, and both are
+structurally stronger than the tier that was dropped.
 
 ## How identity is decided
 

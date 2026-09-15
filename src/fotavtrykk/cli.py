@@ -112,6 +112,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ab.add_argument("--output", required=True, type=Path)
     ab.add_argument("--request-budget", type=int, default=400)
 
+    al = au_sub.add_parser("label", help="Apply adjudications from a decisions file")
+    al.add_argument("--queue", required=True, type=Path)
+    al.add_argument("--decisions", required=True, type=Path,
+                    help="JSONL of {org|id, verdict, basis}")
+    al.add_argument("--labels", required=True, type=Path)
+    al.add_argument("--by", default=audit_mod.LABELLED_BY_ASSISTED,
+                    choices=[audit_mod.LABELLED_BY_ASSISTED, audit_mod.LABELLED_BY_HUMAN])
+    al.add_argument("--reviewer", default="")
+
     asc = au_sub.add_parser("score", help="Score observations against labels")
     asc.add_argument("--envelopes", required=True, type=Path, nargs="+")
     asc.add_argument("--labels", required=True, type=Path)
@@ -491,6 +500,67 @@ def _audit_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _audit_label(args: argparse.Namespace) -> int:
+    """Apply recorded adjudications, cascading a site verdict to its handles."""
+    from .models import Observation
+
+    queue = [
+        Observation.model_validate_json(line)
+        for line in args.queue.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    decisions = [
+        json.loads(line) for line in args.decisions.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    labels = audit_mod.load_labels(args.labels)
+    applied = cascaded = 0
+
+    for decision in decisions:
+        verdict = decision["verdict"]
+        targets = [
+            o for o in queue
+            # `platform` matters as well as `signal_type`: a brreg entity row is
+            # also a company_profile, and a verdict about a website must never
+            # land on the registry lookup that anchors the company.
+            if (o.id == decision.get("id")
+                or (decision.get("org") == o.organisation_number
+                    and o.signal_type == "company_profile"
+                    and o.platform == "company_site"))
+        ]
+        for target in targets:
+            labels[target.id] = {
+                "id": target.id,
+                "exact_entity": verdict in {"y", "m"},
+                "metric_correct": verdict == "y",
+                "sentiment_correct": None,
+                "labelled_by": args.by,
+                "labelled_at": audit_mod.utc_now(),
+                "reviewer": args.reviewer or None,
+                "risk_tier": audit_mod.risk_tier(target),
+                "basis": decision.get("basis"),
+            }
+            applied += 1
+            for other in queue:
+                if (other.signal_type == "profile_handle"
+                        and other.organisation_number == target.organisation_number
+                        and other.source_url == target.source_url):
+                    labels[other.id] = {
+                        **labels[target.id], "id": other.id,
+                        "risk_tier": audit_mod.risk_tier(other),
+                        "derived_from": target.id,
+                        "basis": "handle declared on the site adjudicated above",
+                    }
+                    cascaded += 1
+
+    audit_mod.write_labels(args.labels, labels)
+    print(json.dumps({
+        "decisions": len(decisions), "sites_labelled": applied,
+        "handles_cascaded": cascaded, "labelled_by": args.by,
+        "total_labels": len(labels),
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _audit_score(args: argparse.Namespace) -> int:
     pool, _ = audit_mod.load_pool(args.envelopes)
     labels = audit_mod.load_labels(args.labels)
@@ -517,6 +587,8 @@ def main(argv: list[str] | None = None) -> int:
             return _audit_brief(args)
         if args.audit_command == "review":
             return _audit_review(args)
+        if args.audit_command == "label":
+            return _audit_label(args)
         return _audit_score(args)
     return 2
 
