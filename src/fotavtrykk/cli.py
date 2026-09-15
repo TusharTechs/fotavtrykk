@@ -456,6 +456,7 @@ def _audit_brief(args: argparse.Namespace) -> int:
     from .http import Fetcher, RequestBudget
     from .models import Observation
     from .registry import RegistryCollector
+    from .orgnr import name_tokens
     from .site import SiteResolver
 
     queue = [
@@ -471,6 +472,10 @@ def _audit_brief(args: argparse.Namespace) -> int:
         if o.signal_type == "company_profile" and o.platform == "company_site"
         and o.id not in labels
     ]
+    # A Wikidata entity is not tautological the way a registry lookup is: the
+    # P2333 statement is community-edited and could name the wrong company. So
+    # it gets a brief too, cross-checking the entity against registry facts.
+    wikis = [o for o in queue if o.platform == "wikidata" and o.id not in labels]
 
     async def gather() -> list[dict]:
         budget = RequestBudget(limit=args.request_budget)
@@ -523,7 +528,41 @@ def _audit_brief(args: argparse.Namespace) -> int:
                 brief["conflicting_anywhere"] = sorted(set(brief["conflicting_anywhere"]))
                 return brief
 
-            out = list(await _asyncio.gather(*(one(o) for o in sites)))
+            async def wiki(observation: Observation) -> dict:
+                org = observation.organisation_number
+                envelope = envelopes.get(org)
+                claims = {c.field: c for c in (envelope.claims if envelope else [])}
+                registry_name = (claims.get("legal_name").value
+                                 if claims.get("legal_name") else None) or ""
+                registry_site = (claims.get("registry_website").value
+                                 if claims.get("registry_website") else None)
+                label = (observation.metrics or {}).get("label") or ""
+                wd_site = (claims.get("wikidata.website").value
+                           if claims.get("wikidata.website") else None)
+                shared = set(name_tokens(label)) & set(name_tokens(registry_name))
+                return {
+                    "id": observation.id, "organisation_number": org,
+                    "registry_lookup": audit_mod.BRREG_LOOKUP.format(org=org),
+                    "site": observation.source_url,
+                    "pages": [],
+                    "ours_found_anywhere": True,
+                    "conflicting_anywhere": [],
+                    "span": f"P2333 = {org}",
+                    "corroborated": bool(shared) or bool(
+                        wd_site and registry_site
+                        and wd_site.split("//")[-1].strip("/").removeprefix("www.")
+                        == registry_site.split("//")[-1].strip("/").removeprefix("www.")),
+                    "corroboration": (
+                        f"Wikidata label '{label}' shares {sorted(shared)} with the registry name"
+                        if shared else
+                        (f"Wikidata website {wd_site} matches the registry website"
+                         if wd_site and registry_site else
+                         f"Wikidata label '{label}' shares no tokens with registry name "
+                         f"'{registry_name}' — check this one")),
+                }
+
+            out = list(await _asyncio.gather(
+                *[one(o) for o in sites], *[wiki(o) for o in wikis]))
         return out
 
     briefs = _asyncio.run(gather())
@@ -614,21 +653,19 @@ def _audit_review(args: argparse.Namespace) -> int:
             "reviewer": args.reviewer or None,
             "risk_tier": audit_mod.risk_tier(observation),
         }
-        # A handle is the company linking its own profile from its own site, so
-        # the site verdict settles it. The person still made that one decision.
-        if not args.no_cascade and observation.signal_type == "company_profile":
-            for other in queue:
-                if (other.id not in labels
-                        and other.signal_type == "profile_handle"
-                        and other.organisation_number == observation.organisation_number
-                        and other.source_url == observation.source_url):
-                    labels[other.id] = {
-                        **labels[observation.id],
-                        "id": other.id,
-                        "risk_tier": audit_mod.risk_tier(other),
-                        "derived_from": observation.id,
-                        "basis": "handle declared on the site the reviewer judged",
-                    }
+        # A verdict on a root settles everything that inherited from it: handles
+        # the company links from its own verified site, and the sitelinks and
+        # statements hanging off a Wikidata entity.
+        if not args.no_cascade:
+            for other in audit_mod.dependents(observation, queue):
+                if other.id in labels:
+                    continue
+                labels[other.id] = {
+                    **labels[observation.id], "id": other.id,
+                    "risk_tier": audit_mod.risk_tier(other),
+                    "derived_from": observation.id,
+                    "basis": f"inherited from {observation.platform} root judged by the reviewer",
+                }
         audit_mod.write_labels(args.labels, labels)  # crash-safe: persist each decision
         decided += 1
 
@@ -677,17 +714,14 @@ def _audit_label(args: argparse.Namespace) -> int:
                 "basis": decision.get("basis"),
             }
             applied += 1
-            for other in queue:
-                if (other.signal_type == "profile_handle"
-                        and other.organisation_number == target.organisation_number
-                        and other.source_url == target.source_url):
-                    labels[other.id] = {
-                        **labels[target.id], "id": other.id,
-                        "risk_tier": audit_mod.risk_tier(other),
-                        "derived_from": target.id,
-                        "basis": "handle declared on the site adjudicated above",
-                    }
-                    cascaded += 1
+            for other in audit_mod.dependents(target, queue):
+                labels[other.id] = {
+                    **labels[target.id], "id": other.id,
+                    "risk_tier": audit_mod.risk_tier(other),
+                    "derived_from": target.id,
+                    "basis": f"inherited from the {target.platform} root adjudicated above",
+                }
+                cascaded += 1
 
     audit_mod.write_labels(args.labels, labels)
     print(json.dumps({

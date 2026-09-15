@@ -231,3 +231,57 @@ class TestCanonical:
     def test_booleans_are_not_coerced_to_ints(self):
         assert canonical(True) is True
         assert canonical(1) == 1
+
+
+class TestAuditCascade:
+    """A root decision must settle everything that inherited from it."""
+
+    @staticmethod
+    def _obs(oid, platform, signal, proof, org="987654321"):
+        from fotavtrykk.models import Observation
+        return Observation(id=oid, organisation_number=org, platform=platform,
+                           signal_type=signal, source_url="https://x/", retrieved_at="t",
+                           content_sha256="a"*64, exact_entity=True, identity_proof=proof,
+                           acquisition_mode="official_api", rights_status="approved")
+
+    def test_site_handles_resolve_to_their_site(self):
+        from fotavtrykk.audit import dependents, root_of
+        site = self._obs("s", "company_site", "company_profile", "org_number_on_page")
+        handle = self._obs("h", "linkedin", "profile_handle",
+                           "declared_on_verified_company_site:org_number_on_page")
+        pool = [site, handle]
+        assert root_of(handle, pool) is site
+        assert dependents(site, pool) == [handle]
+
+    def test_wikidata_sitelinks_and_statements_resolve_to_the_entity(self):
+        from fotavtrykk.audit import dependents, root_of
+        entity = self._obs("w", "wikidata", "company_profile",
+                           "wikidata_p2333_organisation_number")
+        page = self._obs("p", "wikipedia", "company_profile", "wikidata_p2333_sitelink:Q1")
+        handle = self._obs("x", "x", "profile_handle", "wikidata_p2333_statement:P2002")
+        pool = [entity, page, handle]
+        assert root_of(page, pool) is entity
+        assert root_of(handle, pool) is entity
+        assert len(dependents(entity, pool)) == 2
+
+    def test_a_proven_observation_has_no_root(self):
+        from fotavtrykk.audit import root_of
+        site = self._obs("s", "company_site", "company_profile", "org_number_on_page")
+        assert root_of(site, [site]) is None
+
+    def test_roots_of_other_companies_are_not_matched(self):
+        from fotavtrykk.audit import root_of
+        mine = self._obs("h", "linkedin", "profile_handle",
+                         "declared_on_verified_company_site:org_number_on_page")
+        theirs = self._obs("s2", "company_site", "company_profile",
+                           "org_number_on_page", org="111111111")
+        assert root_of(mine, [theirs]) is None
+
+    def test_sampler_includes_the_root_of_any_dependent(self):
+        from fotavtrykk.audit import sample_queue
+        site = self._obs("s", "company_site", "company_profile", "org_number_on_page")
+        handles = [self._obs(f"h{i}", "linkedin", "profile_handle",
+                             "declared_on_verified_company_site:org_number_on_page")
+                   for i in range(5)]
+        queue = sample_queue([site, *handles], 3, seed="t", risky_fraction=1.0)
+        assert any(o.id == "s" for o in queue)

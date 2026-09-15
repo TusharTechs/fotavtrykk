@@ -176,6 +176,16 @@ def sample_queue(
     queue: list[Observation] = []
     for tier, n in allocated.items():
         queue.extend(take(by_tier[tier], n))
+
+    # Pull in the root of every inherited observation selected. One decision on
+    # a root then labels all of its dependents, so the reviewer spends their
+    # attention on the fact that actually carries the risk.
+    chosen = {o.id for o in queue}
+    for observation in list(queue):
+        root = root_of(observation, publishable_pool)
+        if root and root.id not in chosen:
+            chosen.add(root.id)
+            queue.append(root)
     return sorted(queue, key=lambda o: _rank(seed, o.id))
 
 
@@ -249,6 +259,41 @@ def render_for_review(observation: Observation, envelope: Envelope | None) -> st
     lines.append("  Does this observation belong to THIS exact legal entity?")
     lines.append("  Not a parent, subsidiary, franchise, brand or namesake.")
     return "\n".join(lines)
+
+
+def dependents(root: Observation, pool: list[Observation]) -> list[Observation]:
+    """Observations whose identity rests on `root`.
+
+    A verdict on a root settles everything that inherited from it, and a wrong
+    root takes its dependents with it — which is why the two are judged
+    together rather than sampled independently.
+    """
+    org = root.organisation_number
+    if root.platform == "company_site" and root.signal_type == "company_profile":
+        marker = "_on_verified_company_site"
+    elif root.platform == "wikidata":
+        marker = "wikidata_p2333_"
+    else:
+        return []
+    return [
+        o for o in pool
+        if o.organisation_number == org and o.id != root.id
+        and marker in (o.identity_proof or "")
+    ]
+
+
+def root_of(observation: Observation, pool: list[Observation]) -> Observation | None:
+    """The observation this one inherited its identity from, if any."""
+    proof = observation.identity_proof or ""
+    org = observation.organisation_number
+    if "_on_verified_company_site" in proof:
+        return next((o for o in pool
+                     if o.organisation_number == org and o.platform == "company_site"
+                     and o.signal_type == "company_profile"), None)
+    if proof.startswith(("wikidata_p2333_sitelink", "wikidata_p2333_statement")):
+        return next((o for o in pool
+                     if o.organisation_number == org and o.platform == "wikidata"), None)
+    return None
 
 
 def load_labels(path: Path) -> dict[str, dict[str, Any]]:
