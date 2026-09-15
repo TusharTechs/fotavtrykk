@@ -52,6 +52,7 @@ V1 covers the official foundation and the identity gate.
 | `connectors/nav_jobs.py` | NAV vacancy feed, org-number verified | done |
 | `connectors/places.py` | Google Places ratings — **needs an API key** | done, unconfigured |
 | `connectors/news.py` | Dated activity from verified company sites | done |
+| `connectors/wikidata.py` | P2333 exact match, extra platforms, handles | done |
 | `connectors/` | External news mentions, YouTube, sentiment | **not built** |
 | `viewer/` | Static evidence browser | **not built** |
 
@@ -151,12 +152,17 @@ it is measured on a harder-than-average population.
 
 ### Proof tiers
 
-| Tier | Evidence | Published? |
-|---|---|---|
-| `primary_key` | The source is keyed by the organisation number | yes |
-| `proven_on_page` | The organisation number appears in captured content | yes |
-| `corroborated` | Registry postcode+town or switchboard number appears on the page | yes |
-| ~~`inferred`~~ | Registry-declared site plus a legal-name match | **no — abstains** |
+| Tier | Evidence | Count | Published? |
+|---|---|---:|---|
+| `primary_key` | The source is keyed by the organisation number | 150 | yes |
+| `proven_on_page` | The organisation number was the match key — on the page, in the NAV feed, or as Wikidata P2333 | 63 | yes |
+| `corroborated` | Registry postcode+town or switchboard appears on the page | 21 | yes |
+| `declared` | Declared by a source whose own identity is proven — a handle on a verified site, a Wikidata statement, a Wikipedia sitelink | 227 | yes |
+| ~~`inferred`~~ | Name similarity only | **0** | **no — abstains** |
+
+`declared` is the tier to watch. Identity is exact at the root, but a wrong root
+takes its dependents with it, so the audit sampler weights it most heavily
+(35%). Nothing publishes at `inferred` any more.
 
 `corroborated` is independent evidence: the postcode and phone come from
 Enhetsregisteret, not the page, so matching them is separate from the name.
@@ -271,16 +277,36 @@ anthropic-ai directly. Its article links are Google redirects, which would need
 a second disallowed fetch to resolve. Convenient, but barred by the source
 policy — the same standard that rejected the name-only identity tier.
 
-Two alternatives were measured and are noted for later:
+**GDELT** was measured and shelved: free and documented, but throttled to one
+request per five seconds — ~500s of a 45-minute batch for 100 companies, with
+low yield for small Norwegian firms.
 
-- **GDELT** — free and documented, but throttled to one request per five
-  seconds, which is ~500s of a 45-minute batch for 100 companies, with low yield
-  for small Norwegian firms.
-- **Wikidata** — carries property P2333, the Norwegian organisation number, for
-  **10,311 entities** (7,326 with a website). Exact entity resolution with no
-  namesake risk, and a distinct platform for `two_platforms` breadth. The SPARQL
-  endpoint is `Disallow: /sparql`, but the MediaWiki API
-  (`haswbstatement:P2333=<orgnr>`) is permitted and returns exact matches.
+### Wikidata — the cheapest coverage in the system
+
+Wikidata carries **P2333, the Norwegian organisation number**, for 10,311
+entities (7,326 with a website). The organisation number is the match key, so
+resolution is exact and there is no namesake risk.
+
+It is also almost free. `haswbstatement:P2333=A|P2333=B|…` batches ~50
+companies into one search and `wbgetentities` takes 50 ids at a time, so a
+150-company batch cost **4 requests** and matched **42 companies (28%)**,
+yielding 175 observations.
+
+| | before | after |
+|---|---:|---:|
+| observations | 286 | **461** |
+| `two_platforms` coverage | 28.0% | **43.3%** |
+| requests | 852 | 856 |
+
+Each entity yields a `wikidata` company profile, a `wikipedia` profile per
+sitelink, and a `profile_handle` for each curated social property (P2002 X,
+P2013 Facebook, P2003 Instagram, P2397 YouTube, P4264 LinkedIn) — reaching
+companies that have no verified website of their own.
+
+Access: content is CC0; `www.wikidata.org/robots.txt` restricts only named
+misbehaving crawlers and the MediaWiki API is the supported programmatic
+interface. `query.wikidata.org/sparql` is `Disallow: /sparql` and is **not**
+used.
 
 ## How identity is decided
 

@@ -247,3 +247,129 @@ class TestCompanyNews:
         assert observations == []
         assert all(c.availability is Availability.NOT_AVAILABLE for c in claims)
         assert "no dated news" in claims[0].note
+
+
+def wd_search(*qids):
+    return {"query": {"search": [{"title": q} for q in qids]}}
+
+
+def wd_entity(qid="Q1", orgnr="987654321", **claims):
+    def statement(value):
+        return [{"mainsnak": {"snaktype": "value", "datavalue": {"value": value}}}]
+    body = {"P2333": statement(orgnr)}
+    for prop, value in claims.items():
+        body[prop] = statement(value)
+    return {"entities": {qid: {
+        "claims": body,
+        "labels": {"nb": {"value": "Nordlys Verksted"}},
+        "sitelinks": {"nowiki": {"title": "Nordlys Verksted"}},
+    }}}
+
+
+class TestWikidata:
+    async def test_matches_on_organisation_number_not_name(self):
+        from fotavtrykk.connectors import WikidataSource
+        f = StubFetcher({"wbgetentities": wd_entity(), "list=search": wd_search("Q1")})
+        src = WikidataSource(f)
+        await src.prime(["987654321"])
+        claims, _, observations = src.collect("987654321")
+        qid = next(c for c in claims if c.field == "wikidata.qid")
+        assert qid.value == "Q1"
+        assert qid.qualifiers["identity_proof"] == "wikidata_p2333_organisation_number"
+        assert observations[0].platform == "wikidata"
+
+    async def test_entity_for_a_different_company_is_discarded(self):
+        from fotavtrykk.connectors import WikidataSource
+        f = StubFetcher({"wbgetentities": wd_entity(orgnr="111111111"),
+                         "list=search": wd_search("Q1")})
+        src = WikidataSource(f)
+        await src.prime(["987654321"])
+        _, _, observations = src.collect("987654321")
+        assert observations == []
+        assert src.by_org == {}
+
+    async def test_wikipedia_sitelink_becomes_its_own_platform(self):
+        from fotavtrykk.connectors import WikidataSource
+        f = StubFetcher({"wbgetentities": wd_entity(), "list=search": wd_search("Q1")})
+        src = WikidataSource(f)
+        await src.prime(["987654321"])
+        _, _, observations = src.collect("987654321")
+        platforms = {o.platform for o in observations}
+        assert "wikipedia" in platforms
+
+    async def test_curated_handles_become_profile_handles(self):
+        from fotavtrykk.connectors import WikidataSource
+        f = StubFetcher({"wbgetentities": wd_entity(P2002="nordlys", P4264="nordlys-as"),
+                         "list=search": wd_search("Q1")})
+        src = WikidataSource(f)
+        await src.prime(["987654321"])
+        _, _, observations = src.collect("987654321")
+        handles = {o.platform: o for o in observations if o.signal_type == "profile_handle"}
+        assert set(handles) == {"x", "linkedin"}
+        assert handles["x"].metrics["declared_url"] == "https://x.com/nordlys"
+
+    async def test_time_and_quantity_values_are_normalised(self):
+        from fotavtrykk.connectors import WikidataSource
+        f = StubFetcher({"wbgetentities": wd_entity(
+                            P571={"time": "+2004-05-01T00:00:00Z"},
+                            P1128={"amount": "+120"}),
+                         "list=search": wd_search("Q1")})
+        src = WikidataSource(f)
+        await src.prime(["987654321"])
+        claims = {c.field: c.value for c in src.collect("987654321")[0]}
+        assert claims["wikidata.inception"] == "2004-05-01"
+        assert claims["wikidata.employees"] == "120"
+
+    async def test_no_entity_is_not_available_not_failed(self):
+        from fotavtrykk.connectors import WikidataSource
+        from fotavtrykk.models import Availability as A
+        f = StubFetcher({"list=search": {"query": {"search": []}}})
+        src = WikidataSource(f)
+        await src.prime(["987654321"])
+        claims, _, observations = src.collect("987654321")
+        assert observations == []
+        assert all(c.availability is A.NOT_AVAILABLE for c in claims)
+
+    async def test_unprimed_source_fails_rather_than_reporting_absence(self):
+        from fotavtrykk.connectors import WikidataSource
+        from fotavtrykk.models import Availability as A
+        src = WikidataSource(StubFetcher({}))
+        claims, _, _ = src.collect("987654321")
+        assert all(c.availability is A.FAILED for c in claims)
+
+    async def test_lookups_are_batched_not_per_company(self):
+        from fotavtrykk.connectors import WikidataSource
+        f = StubFetcher({"wbgetentities": wd_entity(), "list=search": wd_search("Q1")})
+        src = WikidataSource(f)
+        await src.prime([str(900000000 + i) for i in range(120)])
+        # 120 organisations: 3 searches of 50 + 1 entity fetch, not 120 lookups.
+        assert src.stats["searches"] == 3
+        assert src.stats["requests"] <= 5
+
+
+class TestTiering:
+    """P2333 is an organisation-number match, not a name match."""
+
+    def test_wikidata_entity_is_proven(self):
+        from fotavtrykk.audit import TIER_PROVEN, risk_tier
+        from fotavtrykk.models import Observation
+        o = Observation(id="x", organisation_number="1", platform="wikidata",
+                        signal_type="company_profile", source_url="https://x/", 
+                        retrieved_at="t", content_sha256="a"*64, exact_entity=True,
+                        identity_proof="wikidata_p2333_organisation_number",
+                        acquisition_mode="official_api", rights_status="approved")
+        assert risk_tier(o) == TIER_PROVEN
+
+    def test_inherited_statements_are_declared(self):
+        from fotavtrykk.audit import TIER_DECLARED, risk_tier
+        from fotavtrykk.models import Observation
+        for proof in ("wikidata_p2333_statement:P2002",
+                      "wikidata_p2333_sitelink:Q1",
+                      "declared_on_verified_company_site:org_number_on_page",
+                      "published_on_verified_company_site:org_number_on_page"):
+            o = Observation(id="x", organisation_number="1", platform="x",
+                            signal_type="profile_handle", source_url="https://x/",
+                            retrieved_at="t", content_sha256="a"*64, exact_entity=True,
+                            identity_proof=proof, acquisition_mode="official_api",
+                            rights_status="approved")
+            assert risk_tier(o) == TIER_DECLARED, proof

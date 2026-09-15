@@ -75,6 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-jobs", action="store_true", help="Skip the NAV vacancy feed")
     run.add_argument("--no-places", action="store_true", help="Skip Google Places")
     run.add_argument("--no-news", action="store_true", help="Skip company activity pages")
+    run.add_argument("--no-wikidata", action="store_true", help="Skip Wikidata")
 
     refresh = sub.add_parser(
         "refresh",
@@ -175,6 +176,7 @@ def _run(args: argparse.Namespace) -> int:
         enable_jobs=not args.no_jobs,
         enable_places=not args.no_places,
         enable_news=not args.no_news,
+        enable_wikidata=not args.no_wikidata,
     ))
 
     content_sha = write_envelopes(args.output, envelopes)

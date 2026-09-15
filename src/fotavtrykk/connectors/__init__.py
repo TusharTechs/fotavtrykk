@@ -7,6 +7,7 @@ connector that can only match on name does not ship — that tier was measured a
 
 from .nav_jobs import NavJobsSource
 from .news import CompanyNewsSource
+from .wikidata import WikidataSource
 from .places import PlacesSource
 
-__all__ = ["CompanyNewsSource", "NavJobsSource", "PlacesSource"]
+__all__ = ["CompanyNewsSource", "NavJobsSource", "PlacesSource", "WikidataSource"]

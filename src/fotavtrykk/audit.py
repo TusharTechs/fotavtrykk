@@ -44,17 +44,28 @@ from .models import Envelope, Observation, publishable, validate_observation
 TIER_PRIMARY_KEY = "primary_key"   # the source is keyed by the organisation number
 TIER_PROVEN = "proven_on_page"     # an organisation number was found in captured content
 TIER_CORROBORATED = "corroborated"  # an independent registry fact appears on the page
-TIER_INFERRED = "inferred"         # name match, or a handle declared by a verified site
+TIER_DECLARED = "declared"         # declared by a source whose own identity is proven
+TIER_INFERRED = "inferred"         # name similarity only — no longer published
 
-RISKY_TIERS = {TIER_PROVEN, TIER_CORROBORATED, TIER_INFERRED}
+RISKY_TIERS = {TIER_PROVEN, TIER_CORROBORATED, TIER_DECLARED, TIER_INFERRED}
+
+# Proof strings that mean "the organisation number was the match key".
+# P2333 is Wikidata's Norwegian organisation number, so a P2333 match is an
+# organisation-number match, not a name one.
+ORG_NUMBER_PROOFS = ("org_number", "p2333")
+# Prefixes meaning the fact was declared by a source we already proved, rather
+# than proven directly. A wrong root cascades, so these are audited as a group.
+DECLARED_PREFIXES = ("declared_on_", "published_on_", "wikidata_p2333_sitelink",
+                     "wikidata_p2333_statement")
 
 # Review effort is finite, so spend it where the evidence is weakest. These are
 # relative sampling weights, not probabilities.
 TIER_WEIGHTS = {
-    TIER_INFERRED: 0.45,      # name match only — the thinnest evidence we publish
-    TIER_CORROBORATED: 0.25,  # an independent registry fact also appears
-    TIER_PROVEN: 0.15,        # the organisation number is on the page
-    TIER_PRIMARY_KEY: 0.15,   # tautological, but keeps the audit honest
+    TIER_INFERRED: 0.25,      # name only; nothing should publish at this tier now
+    TIER_DECLARED: 0.35,      # inherited from a proven root — a wrong root cascades
+    TIER_CORROBORATED: 0.20,  # an independent registry fact also appears
+    TIER_PROVEN: 0.10,        # the organisation number itself was the match key
+    TIER_PRIMARY_KEY: 0.10,   # tautological, but keeps the audit honest
 }
 
 LABELLED_BY_MACHINE = "machine"
@@ -68,10 +79,12 @@ def utc_now() -> str:
 
 
 def risk_tier(observation: Observation) -> str:
-    proof = observation.identity_proof or ""
+    proof = (observation.identity_proof or "").casefold()
     if observation.platform == "brreg" and proof == "organisation_number_primary_key":
         return TIER_PRIMARY_KEY
-    if proof.startswith("org_number_") or ":org_number_" in proof:
+    if proof.startswith(DECLARED_PREFIXES):
+        return TIER_DECLARED
+    if any(token in proof for token in ORG_NUMBER_PROOFS):
         return TIER_PROVEN
     if "registry_site_corroborated" in proof:
         return TIER_CORROBORATED

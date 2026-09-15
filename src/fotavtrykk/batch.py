@@ -11,7 +11,7 @@ import asyncio
 import time
 from pathlib import Path
 
-from .connectors import CompanyNewsSource, NavJobsSource, PlacesSource
+from .connectors import CompanyNewsSource, NavJobsSource, PlacesSource, WikidataSource
 from .diff import reconcile
 from .http import CostLedger, Fetcher, RequestBudget, start_call_counter, utc_now
 from .models import (
@@ -33,6 +33,7 @@ class CompanyRunner:
         jobs: NavJobsSource | None = None,
         places: PlacesSource | None = None,
         news: CompanyNewsSource | None = None,
+        wikidata: WikidataSource | None = None,
     ) -> None:
         self.fetcher = fetcher
         self.run_id = run_id
@@ -42,6 +43,7 @@ class CompanyRunner:
         self.jobs = jobs
         self.places = places
         self.news = news
+        self.wikidata = wikidata
 
     async def run(self, org: str) -> Envelope:
         started = utc_now()
@@ -112,7 +114,13 @@ class CompanyRunner:
                     except Exception as exc:  # noqa: BLE001
                         errors.append({"stage": "activity", "message": f"{type(exc).__name__}: {exc}"})
 
-                # NAV is primed once per batch, so reading it costs nothing here.
+                # Both of these are primed once per batch, so reading is free.
+                if self.wikidata is not None:
+                    wd_claims, wd_evidence, wd_observations = self.wikidata.collect(org)
+                    claims += wd_claims
+                    evidence += wd_evidence
+                    observations += wd_observations
+
                 if self.jobs is not None:
                     job_claims, job_evidence, job_observations = self.jobs.collect(org)
                     claims += job_claims
@@ -201,6 +209,7 @@ async def run_batch(
     enable_jobs: bool = True,
     enable_places: bool = True,
     enable_news: bool = True,
+    enable_wikidata: bool = True,
 ) -> tuple[list[Envelope], dict]:
     budget = RequestBudget(limit=request_budget)
     ledger = CostLedger(limit_usd=cost_limit_usd)
@@ -216,8 +225,13 @@ async def run_batch(
         places = PlacesSource(fetcher, ledger=ledger) if enable_places else None
         news = CompanyNewsSource(fetcher) if enable_news else None
 
+        wikidata = None
+        if enable_wikidata:
+            wikidata = WikidataSource(fetcher)
+            await wikidata.prime(organisations)
+
         runner = CompanyRunner(fetcher, run_id, previous=previous,
-                               jobs=jobs, places=places, news=news)
+                               jobs=jobs, places=places, news=news, wikidata=wikidata)
 
         async def guarded(org: str) -> None:
             async with gate:
@@ -243,6 +257,7 @@ async def run_batch(
         "cost_by_provider": dict(ledger.by_provider),
         "connectors": {
             "nav_jobs": (jobs.stats | {"error": jobs.error}) if jobs else {"enabled": False},
+            "wikidata": (wikidata.stats | {"error": wikidata.error}) if wikidata else {"enabled": False},
             "google_places": {
                 "enabled": bool(places and places.enabled),
                 "searches": places.searches if places else 0,
