@@ -210,6 +210,7 @@ async def run_batch(
     enable_places: bool = True,
     enable_news: bool = True,
     enable_wikidata: bool = True,
+    places_cost_per_search: float | None = None,
 ) -> tuple[list[Envelope], dict]:
     budget = RequestBudget(limit=request_budget)
     ledger = CostLedger(limit_usd=cost_limit_usd)
@@ -222,7 +223,13 @@ async def run_batch(
         if enable_jobs and company_names:
             jobs = NavJobsSource(fetcher)
             await jobs.prime(list(company_names.items()))
-        places = PlacesSource(fetcher, ledger=ledger) if enable_places else None
+        places = None
+        if enable_places:
+            places = PlacesSource(
+                fetcher, ledger=ledger,
+                **({"cost_per_search_usd": places_cost_per_search}
+                   if places_cost_per_search else {}),
+            )
         news = CompanyNewsSource(fetcher) if enable_news else None
 
         wikidata = None

@@ -44,9 +44,14 @@ FIELD_MASK = ",".join((
     "places.googleMapsUri", "places.primaryTypeDisplayName",
 ))
 
-# Text Search Enterprise + Atmosphere, global list price at time of writing.
-# Declared in the run report; verify against current billing before a paid run.
-ESTIMATED_COST_PER_SEARCH_USD = 0.040
+# Text Search **Enterprise** — $35 per 1,000 on the global list, so $0.035 each.
+# rating/userRatingCount/websiteUri/phone live in that tier. The field mask
+# deliberately omits reviews and editorialSummary, which would push the call into
+# Enterprise + Atmosphere at $40 per 1,000. Text Search has no monthly free
+# allowance (unlike Place Details), so every search is billed.
+# Verify against your own billing before a paid run; override with
+# --places-cost-per-search.
+ESTIMATED_COST_PER_SEARCH_USD = 0.035
 
 PROOF_DOMAIN = "places_website_matches_verified_domain"
 PROOF_PHONE = "places_phone_matches_registry"

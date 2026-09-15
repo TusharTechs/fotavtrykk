@@ -16,6 +16,29 @@ from .orgnr import is_valid, normalise
 from .snapshots import load_envelopes, manifest, write_envelopes, write_manifest
 
 
+def load_env_file(path: Path = Path(".env")) -> list[str]:
+    """Read KEY=value lines into the environment without overwriting real ones.
+
+    Keeps credentials out of shell history, out of the repository and out of any
+    transcript: the value is read from disk and never echoed.
+    """
+    import os
+
+    loaded: list[str] = []
+    if not path.exists():
+        return loaded
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+            loaded.append(key)
+    return loaded
+
+
 def read_company_names(path: Path) -> dict[str, str]:
     """Legal names from the input file, used to seed candidate lookups."""
     names: dict[str, str] = {}
@@ -76,6 +99,17 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-places", action="store_true", help="Skip Google Places")
     run.add_argument("--no-news", action="store_true", help="Skip company activity pages")
     run.add_argument("--no-wikidata", action="store_true", help="Skip Wikidata")
+    run.add_argument("--places-cost-per-search", type=float,
+                     help="Override the declared Places price per search (USD)")
+    run.add_argument("--cost-limit", type=float, default=10.0,
+                     help="Third-party spend cap for this batch (USD)")
+
+    pc = sub.add_parser(
+        "places-check",
+        help="Validate the Places key with a single search before spending a batch",
+    )
+    pc.add_argument("--organisations", required=True, type=Path)
+    pc.add_argument("--limit", type=int, default=3)
 
     refresh = sub.add_parser(
         "refresh",
@@ -151,7 +185,62 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _places_check(args: argparse.Namespace) -> int:
+    """Spend a few cents to prove the key works before committing a batch."""
+    import asyncio as _asyncio
+
+    from .connectors import PlacesSource
+    from .http import CostLedger, Fetcher, RequestBudget
+    from .registry import RegistryCollector
+
+    loaded = load_env_file()
+    names = read_company_names(args.organisations)
+    orgs = list(names)[: args.limit]
+    if not orgs:
+        print("no organisations with names in input", file=sys.stderr)
+        return 2
+
+    async def main() -> int:
+        ledger = CostLedger(limit_usd=10.0)
+        async with Fetcher(RequestBudget(50)) as fetcher:
+            places = PlacesSource(fetcher, ledger=ledger)
+            if not places.enabled:
+                print(json.dumps({
+                    "configured": False,
+                    "env_file_keys_loaded": loaded,
+                    "hint": "create a .env file containing GOOGLE_PLACES_API_KEY=<your key>",
+                }, indent=2))
+                return 2
+            registry = RegistryCollector(fetcher)
+            rows = []
+            for org in orgs:
+                _, entity = await registry.entity(org)
+                identity = registry.identity_bundle(entity) if entity else {}
+                claims, _, observations = await places.collect(
+                    org, names[org], identity, None)
+                rating = next((c for c in claims if c.field == "places.rating"), None)
+                rows.append({
+                    "organisation_number": org, "name": names[org],
+                    "state": str(rating.availability) if rating else None,
+                    "rating": rating.value if rating else None,
+                    "proof": (observations[0].identity_proof if observations else None),
+                    "note": rating.note if rating else None,
+                })
+            print(json.dumps({
+                "configured": True,
+                "searches": places.searches,
+                "published": places.published,
+                "spent_usd": round(ledger.spent_usd, 4),
+                "cost_per_search_usd": places.cost_per_search,
+                "projected_per_100_companies_usd": round(places.cost_per_search * 100, 2),
+                "results": rows,
+            }, ensure_ascii=False, indent=2))
+            return 0
+    return _asyncio.run(main())
+
+
 def _run(args: argparse.Namespace) -> int:
+    load_env_file()
     organisations = read_organisations(args.organisations)
     if args.limit:
         organisations = organisations[: args.limit]
@@ -177,6 +266,8 @@ def _run(args: argparse.Namespace) -> int:
         enable_places=not args.no_places,
         enable_news=not args.no_news,
         enable_wikidata=not args.no_wikidata,
+        cost_limit_usd=args.cost_limit,
+        places_cost_per_search=args.places_cost_per_search,
     ))
 
     content_sha = write_envelopes(args.output, envelopes)
@@ -607,6 +698,8 @@ def main(argv: list[str] | None = None) -> int:
         return _refresh(args)
     if args.command == "select":
         return _select(args)
+    if args.command == "places-check":
+        return _places_check(args)
     if args.command == "audit":
         if args.audit_command == "queue":
             return _audit_queue(args)
