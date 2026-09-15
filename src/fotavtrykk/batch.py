@@ -11,6 +11,7 @@ import asyncio
 import time
 from pathlib import Path
 
+from .connectors import NavJobsSource, PlacesSource
 from .diff import reconcile
 from .http import CostLedger, Fetcher, RequestBudget, start_call_counter, utc_now
 from .models import (
@@ -29,12 +30,16 @@ class CompanyRunner:
     def __init__(
         self, fetcher: Fetcher, run_id: str,
         previous: dict[str, "Envelope"] | None = None,
+        jobs: NavJobsSource | None = None,
+        places: PlacesSource | None = None,
     ) -> None:
         self.fetcher = fetcher
         self.run_id = run_id
         self.previous = previous or {}
         self.registry = RegistryCollector(fetcher)
         self.site = SiteResolver(fetcher)
+        self.jobs = jobs
+        self.places = places
 
     async def run(self, org: str) -> Envelope:
         started = utc_now()
@@ -62,18 +67,21 @@ class CompanyRunner:
             else:
                 legal_name = entity_data.get("navn") or ""
                 seed = self.registry._normalise_site(entity_data.get("hjemmeside"))
+                identity = self.registry.identity_bundle(entity_data)
 
-                results = await asyncio.gather(
+                stages = ["roles", "accounts", "subunits", "website"]
+                work = [
                     self.registry.roles(org),
                     self.registry.accounts(org),
                     self.registry.subunits(org),
-                    self.site.resolve(
-                        org, legal_name, seed,
-                        self.registry.identity_bundle(entity_data),
-                    ),
-                    return_exceptions=True,
-                )
-                for stage, outcome in zip(("roles", "accounts", "subunits", "website"), results):
+                    self.site.resolve(org, legal_name, seed, identity),
+                ]
+                if self.places is not None:
+                    stages.append("places")
+                    work.append(self.places.collect(org, legal_name, identity, seed))
+
+                results = await asyncio.gather(*work, return_exceptions=True)
+                for stage, outcome in zip(stages, results):
                     if isinstance(outcome, BaseException):
                         errors.append({"stage": stage, "message": f"{type(outcome).__name__}: {outcome}"})
                         claims.append(Claim(
@@ -85,6 +93,13 @@ class CompanyRunner:
                     evidence += outcome[1]
                     if len(outcome) > 2:
                         observations += outcome[2]
+
+                # NAV is primed once per batch, so reading it costs nothing here.
+                if self.jobs is not None:
+                    job_claims, job_evidence, job_observations = self.jobs.collect(org)
+                    claims += job_claims
+                    evidence += job_evidence
+                    observations += job_observations
 
                 # The registry is itself a publishable platform observation.
                 observations.append(self._registry_observation(org, entity_result))
@@ -164,6 +179,9 @@ async def run_batch(
     concurrency: int = 8,
     cost_limit_usd: float = 10.0,
     previous: dict[str, Envelope] | None = None,
+    company_names: dict[str, str] | None = None,
+    enable_jobs: bool = True,
+    enable_places: bool = True,
 ) -> tuple[list[Envelope], dict]:
     budget = RequestBudget(limit=request_budget)
     ledger = CostLedger(limit_usd=cost_limit_usd)
@@ -172,7 +190,13 @@ async def run_batch(
     envelopes: dict[str, Envelope] = {}
 
     async with Fetcher(budget, snapshot_dir=snapshot_dir) as fetcher:
-        runner = CompanyRunner(fetcher, run_id, previous=previous)
+        jobs = None
+        if enable_jobs and company_names:
+            jobs = NavJobsSource(fetcher)
+            await jobs.prime(list(company_names.items()))
+        places = PlacesSource(fetcher, ledger=ledger) if enable_places else None
+
+        runner = CompanyRunner(fetcher, run_id, previous=previous, jobs=jobs, places=places)
 
         async def guarded(org: str) -> None:
             async with gate:
@@ -195,6 +219,15 @@ async def run_batch(
         "requests": budget.used,
         "request_budget": budget.limit,
         "third_party_cost_usd": round(ledger.spent_usd, 4),
+        "cost_by_provider": dict(ledger.by_provider),
+        "connectors": {
+            "nav_jobs": (jobs.stats | {"error": jobs.error}) if jobs else {"enabled": False},
+            "google_places": {
+                "enabled": bool(places and places.enabled),
+                "searches": places.searches if places else 0,
+                "published": places.published if places else 0,
+            },
+        },
         "runtime_ms": int((time.perf_counter() - started) * 1000),
         "p50_ms": _percentile([e.operations.runtime_ms for e in ordered], 50),
         "p95_ms": _percentile([e.operations.runtime_ms for e in ordered], 95),

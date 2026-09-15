@@ -49,7 +49,9 @@ V1 covers the official foundation and the identity gate.
 | `snapshots.py` | Snapshot load/save, manifest, content hash | done |
 | `sampling.py` | Stratified selection from the 411,160-company universe | done |
 | `audit.py` | Risk-weighted audit queue, labelling, scoring | done |
-| `connectors/` | Places, NAV jobs, news, YouTube | **not built** |
+| `connectors/nav_jobs.py` | NAV vacancy feed, org-number verified | done |
+| `connectors/places.py` | Google Places ratings — **needs an API key** | done, unconfigured |
+| `connectors/` | News, YouTube | **not built** |
 | `viewer/` | Static evidence browser | **not built** |
 
 External connectors are where the rubric's differentiating points live. The
@@ -195,6 +197,56 @@ labels, `entity_precision: 1.0`, `audit_size` and `precision` passing.
 `qualification_passed` remains **false** until a person adjudicates the risky
 rows — 42 `proven_on_page` and 60 `corroborated` now await review, and both are
 structurally stronger than the tier that was dropped.
+
+## Connectors
+
+Both resolve to the exact legal entity before publishing. Neither will publish
+on a name match — that tier was measured at 84% precision and dropped.
+
+### NAV vacancies — working, but the ceiling is low
+
+Uses the official [stilling-feed API](https://navikt.github.io/pam-stilling-feed/)
+with the published public token (a stable private token is free on request).
+
+The site's own `/stillinger/api/search` endpoint is **not** usable: it returns
+429 after a handful of calls and stays blocked for a long window, so it cannot
+carry a 100-company batch. The feed is a changelog, so it is walked **once per
+batch** rather than once per company — `If-Modified-Since` jumps straight to
+recent entries. Feed pages carry a business *name* only, so entries are
+name-matched locally to pick candidates, then each candidate is fetched and
+published only if `employer.orgnr` matches exactly.
+
+**Measured coverage is close to zero.** Across 150 companies over a 75-day
+window: 32 name candidates, 10 fetched, **0 verified**. That is not a defect —
+Norway has ~13,500 active adverts against 411,160 companies in the universe, so
+the absolute ceiling is ~3.3% and realistically 1–2% once large employers
+posting many adverts are accounted for. The connector costs ~25 requests per
+batch shared across all companies and is exact when it does fire, so it earns
+its place on hit-rate, not on population coverage.
+
+### Google Places — built, not yet enabled
+
+Reaches `ratings_reviews`, which nothing else available can: the registry has no
+ratings and a company's own site cannot supply independent ones.
+
+```bash
+export GOOGLE_PLACES_API_KEY=...
+```
+
+Without a key it returns `not_available` with a reason, at zero cost and zero
+requests — never a fabricated blank.
+
+Places matches on text, so results are candidates. A place is published only
+when an independent registry fact agrees: the place's website resolves to the
+same verified domain, its phone matches the registry switchboard, or its address
+carries the registry postcode and town. Otherwise the claim is `ambiguous`.
+
+**Cost warning.** `rating` and `userRatingCount` are in the Enterprise field
+mask, the most expensive SKU. At roughly $0.04 per search that is ~$4.00 per
+100-company batch against a $10 cap — viable but not negligible. Every call is
+charged to a ledger and the connector stops before the cap. Verify the current
+price against your own billing before a paid run; the figure in
+`ESTIMATED_COST_PER_SEARCH_USD` is a documented estimate, not a quote.
 
 ## How identity is decided
 

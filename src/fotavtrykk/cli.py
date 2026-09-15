@@ -16,6 +16,24 @@ from .orgnr import is_valid, normalise
 from .snapshots import load_envelopes, manifest, write_envelopes, write_manifest
 
 
+def read_company_names(path: Path) -> dict[str, str]:
+    """Legal names from the input file, used to seed candidate lookups."""
+    names: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        org = normalise(row.get("organisation_number") or row.get("organisasjonsnummer"))
+        name = row.get("name") or row.get("navn")
+        if len(org) == 9 and name:
+            names[org] = str(name)
+    return names
+
+
 def read_organisations(path: Path) -> list[str]:
     """Accepts JSONL with an `organisation_number` field, or one number per line."""
     numbers: list[str] = []
@@ -54,6 +72,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--request-budget", type=int, default=DEFAULT_REQUEST_BUDGET)
     run.add_argument("--concurrency", type=int, default=8)
     run.add_argument("--limit", type=int, help="Process only the first N organisations")
+    run.add_argument("--no-jobs", action="store_true", help="Skip the NAV vacancy feed")
+    run.add_argument("--no-places", action="store_true", help="Skip Google Places")
 
     refresh = sub.add_parser(
         "refresh",
@@ -150,6 +170,9 @@ def _run(args: argparse.Namespace) -> int:
         snapshot_dir=args.snapshots,
         concurrency=args.concurrency,
         previous=previous,
+        company_names=read_company_names(args.organisations),
+        enable_jobs=not args.no_jobs,
+        enable_places=not args.no_places,
     ))
 
     content_sha = write_envelopes(args.output, envelopes)

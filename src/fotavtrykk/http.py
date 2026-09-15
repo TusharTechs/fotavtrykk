@@ -171,11 +171,17 @@ class Fetcher:
         if not target.exists():
             target.write_bytes(body)
 
-    async def get(self, url: str, *, accept: str | None = None) -> FetchResult:
+    async def get(
+        self, url: str, *, accept: str | None = None,
+        headers: dict[str, str] | None = None, timeout: float | None = None,
+    ) -> FetchResult:
         """Fetch one URL. Never raises for HTTP or network errors — returns a
         result carrying the failure, so a company always reaches a terminal state."""
         assert self._client is not None, "Fetcher must be used as an async context manager"
-        headers = {"Accept": accept} if accept else None
+        request_headers: dict[str, str] = dict(headers or {})
+        if accept:
+            request_headers.setdefault("Accept", accept)
+        headers = request_headers or None
         spent = 0
         last_error: str | None = None
         last_status: int | None = None
@@ -192,7 +198,10 @@ class Fetcher:
             _record_calls(1)
             try:
                 async with self._host_gate(url):
-                    response = await self._client.get(url, headers=headers)
+                    response = await self._client.get(
+                        url, headers=headers,
+                        timeout=timeout if timeout is not None else self.timeout,
+                    )
                 redirects = len(response.history)
                 if redirects:
                     self.budget.charge_extra(redirects)
@@ -241,6 +250,43 @@ class Fetcher:
         return FetchResult(
             url=url, ok=False, status=last_status, retrieved_at=utc_now(),
             requests_used=spent, error=last_error or "unknown fetch failure",
+        )
+
+    async def post_json(
+        self, url: str, *, payload: dict, headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> FetchResult:
+        """POST a JSON body. Counts against the same budget as a GET."""
+        assert self._client is not None, "Fetcher must be used as an async context manager"
+        try:
+            self.budget.reserve(1)
+        except BudgetExhausted as exc:
+            return FetchResult(url=url, ok=False, retrieved_at=utc_now(), error=str(exc))
+        _record_calls(1)
+        try:
+            async with self._host_gate(url):
+                response = await self._client.post(
+                    url, json=payload,
+                    headers={**(headers or {}), "Content-Type": "application/json"},
+                    timeout=timeout if timeout is not None else self.timeout,
+                )
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            return FetchResult(url=url, ok=False, retrieved_at=utc_now(),
+                               requests_used=1, error=f"{type(exc).__name__}: {exc}")
+        body = response.content[:MAX_BODY_BYTES]
+        digest = hashlib.sha256(body).hexdigest()
+        if response.status_code >= 400:
+            return FetchResult(
+                url=url, ok=False, status=response.status_code, retrieved_at=utc_now(),
+                requests_used=1, error=f"HTTP {response.status_code}",
+                blocked=response.status_code in (401, 403, 429, 451),
+                text=body.decode("utf-8", errors="replace"),
+            )
+        self._persist(digest, body)
+        return FetchResult(
+            url=url, ok=True, status=response.status_code, final_url=str(response.url),
+            content=body, text=body.decode(response.encoding or "utf-8", errors="replace"),
+            content_sha256=digest, retrieved_at=utc_now(), requests_used=1,
         )
 
     async def _get_insecure(self, url: str, headers: dict | None) -> FetchResult | None:
