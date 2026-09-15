@@ -18,6 +18,7 @@ from .models import (
     Availability, Claim, Envelope, Evidence, Observation, Operations, RunInfo,
 )
 from .registry import RegistryCollector
+from .synthesis import summarise
 from .site import SiteResolver
 
 # The evaluator allows 2,000 requests per 100 companies. We reserve a tail so a
@@ -163,7 +164,7 @@ class CompanyRunner:
         ))
         evidence = evidence + [e for e in carried if e.id not in {x.id for x in evidence}]
 
-        return Envelope(
+        envelope = Envelope(
             organisation_number=org,
             run=RunInfo(
                 run_id=self.run_id, started_at=started, completed_at=utc_now(),
@@ -181,6 +182,10 @@ class CompanyRunner:
                 third_party_cost_usd=0.0,
             ),
         )
+        # Written last: the summary reads published claims, so it can only be
+        # built once they are settled.
+        envelope.summary = summarise(envelope)
+        return envelope
 
     def _registry_observation(self, org: str, result) -> Observation:
         return Observation(

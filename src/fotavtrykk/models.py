@@ -174,6 +174,7 @@ class Envelope(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     observations: list[Observation] = Field(default_factory=list)
     changes: list[Change] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
     errors: list[dict[str, Any]] = Field(default_factory=list)
     operations: Operations = Field(default_factory=Operations)
 

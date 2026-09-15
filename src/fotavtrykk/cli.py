@@ -104,6 +104,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cost-limit", type=float, default=10.0,
                      help="Third-party spend cap for this batch (USD)")
 
+    sm = sub.add_parser(
+        "summarise",
+        help="Regenerate summaries over stored envelopes. Makes no requests.",
+    )
+    sm.add_argument("--envelopes", required=True, type=Path)
+    sm.add_argument("--output", required=True, type=Path)
+
     vw = sub.add_parser("viewer", help="Build the static evidence viewer")
     vw.add_argument("--envelopes", required=True, type=Path)
     vw.add_argument("--report", type=Path)
@@ -188,6 +195,31 @@ def _build_parser() -> argparse.ArgumentParser:
     asc.add_argument("--report", type=Path)
     asc.add_argument("--minimum-audit", type=int, default=100)
     return parser
+
+
+def _summarise(args: argparse.Namespace) -> int:
+    """Rebuild summaries from stored claims — no refetching, no cost."""
+    from .snapshots import write_envelopes
+    from .synthesis import summarise
+
+    envelopes = list(load_envelopes(args.envelopes).values())
+    if not envelopes:
+        print(f"no envelopes in {args.envelopes}", file=sys.stderr)
+        return 2
+    for envelope in envelopes:
+        envelope.summary = summarise(envelope)
+    digest = write_envelopes(args.output, envelopes)
+    words = [len(e.summary.get("text", "").split()) for e in envelopes]
+    unknowns = [len(e.summary.get("unknowns", [])) for e in envelopes]
+    print(json.dumps({
+        "envelopes": len(envelopes),
+        "median_words": sorted(words)[len(words) // 2],
+        "median_unknowns_listed": sorted(unknowns)[len(unknowns) // 2],
+        "with_no_external_source": sum(
+            1 for e in envelopes if "rests on official records alone" in e.summary.get("text", "")),
+        "content_sha256": digest,
+    }, indent=2))
+    return 0
 
 
 def _viewer(args: argparse.Namespace) -> int:
@@ -755,6 +787,8 @@ def main(argv: list[str] | None = None) -> int:
         return _places_check(args)
     if args.command == "viewer":
         return _viewer(args)
+    if args.command == "summarise":
+        return _summarise(args)
     if args.command == "audit":
         if args.audit_command == "queue":
             return _audit_queue(args)

@@ -80,6 +80,8 @@ def project(envelope: Envelope) -> dict[str, Any]:
             "jobs.active_count", "activity.latest_post_date", "activity.posts",
         )},
         "platforms": platforms,
+        "summary": envelope.summary.get("text"),
+        "unknowns": envelope.summary.get("unknowns", []),
         "changes": [c.model_dump() for c in envelope.changes],
         "requests": envelope.operations.requests,
     }
@@ -165,6 +167,8 @@ td.v{color:var(--ink);word-break:break-word}
 a{color:var(--accent)}
 .src{font-size:.7rem}
 .note{color:var(--ink3);font-size:.78rem;font-style:italic}
+.sum{margin:14px 0 4px;padding:12px 14px;background:var(--sunk);border-radius:6px;
+  border-left:3px solid var(--accent);font-size:.9rem;line-height:1.6;max-width:78ch}
 .conf{font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
   padding:1px 5px;border-radius:3px;background:var(--ok-wash);color:var(--ok);white-space:nowrap}
 .empty{padding:26px;text-align:center;color:var(--ink3)}
@@ -296,6 +300,11 @@ function card(c){
       <div class="pf">${plats.map(p=>`<span class="pill">${esc(p)}</span>`).join('')}</div>
     </summary>
     <div class="body">
+      ${c.summary ? `<p class="sum">${esc(c.summary)}</p>` : ''}
+      ${c.unknowns && c.unknowns.length ? `<h3>What we could not establish</h3>
+        <table>${c.unknowns.map(u=>`<tr><td class="k">${esc(u.field)}</td>
+        <td class="v"><span class="st s-${esc(u.state)}">${esc(u.state.replace('_',' '))}</span>
+        <span class="note">${esc(u.reason)}</span></td></tr>`).join('')}</table>` : ''}
       <h3>Identity</h3><table>
         ${row('legal form', {value:c.form, state:c.form?'available':'not_available'})}
         ${row('address', cl['business_address'])}

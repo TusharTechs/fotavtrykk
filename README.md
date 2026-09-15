@@ -53,6 +53,7 @@ V1 covers the official foundation and the identity gate.
 | `connectors/places.py` | Google Places ratings — **needs an API key** | done, unconfigured |
 | `connectors/news.py` | Dated activity from verified company sites | done |
 | `connectors/wikidata.py` | P2333 exact match, extra platforms, handles | done |
+| `synthesis.py` | Deterministic summary, changes and unknowns | done |
 | `viewer.py` | Static evidence viewer, desktop and mobile | done |
 | `connectors/` | External news mentions, YouTube, sentiment | **not built** |
 
@@ -248,6 +249,35 @@ Wikidata illustrates the gap sharply: 28% of the audit corpus but **0.8%** of a
 random draw, because Wikidata holds notable companies and the universe is mostly
 dormant holding companies.
 
+## Synthesis
+
+The rubric asks the summary to *"explain the company, changes and unknowns
+without making unsupported claims"*. Two of those three are about restraint, so
+the summary is generated **deterministically from published claims** rather than
+by a model.
+
+```bash
+# Rebuild summaries over stored envelopes. Makes no requests and costs nothing.
+uv run fotavtrykk summarise --envelopes artifact/profiles.jsonl \
+  --output artifact/profiles.jsonl
+```
+
+A template cannot hallucinate a revenue figure or invent a director, it costs
+nothing per batch, and it produces byte-identical output for an unchanged
+snapshot — which the idempotent-refresh gate needs and a sampled model would
+quietly break. Every sentence is built from a claim marked `available`, and the
+evidence ids that produced it travel with the summary.
+
+Measured over the 1,000-profile artifact: median 81 words, median 5 unknowns
+listed per company, and **607 of 1,000 say plainly that no permitted external
+source could be tied to the entity**. On a universe of mostly dormant holding
+companies, that is the useful answer, and saying it is the point.
+
+What the tests pin is mostly what must *not* appear: a value whose claim is
+`not_available` never reaches the text, an `ambiguous` website is never
+presented as verified, currency travels with every figure, group accounts are
+labelled as group accounts, and a filed zero is explained rather than hidden.
+
 ## The viewer
 
 ```bash
@@ -261,7 +291,8 @@ the external footprint beside the registry facts, and for every fact it shows
 
 ![Evidence viewer on desktop](docs/viewer-desktop.png)
 
-Worth noting in that screenshot: TOMRA's Facebook, Instagram and LinkedIn
+The summary leads, followed by *what we could not establish* — then the
+evidence. Worth noting further down: TOMRA's Facebook, Instagram and LinkedIn
 handles are each marked **confirmed by 2 sources** — found independently on the
 verified company site *and* as a Wikidata P2333 statement. Two independent
 routes agreeing on the same handle is corroboration, so they are merged into one
