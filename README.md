@@ -176,8 +176,44 @@ distinction the provenance split exists to preserve:
 - `provisional_qualification: true` — what the kit's evaluator would conclude.
 - `qualification_passed: false` — what we are entitled to claim.
 
-50 `inferred` rows are the highest-value review target:
-`audit review --tier inferred`.
+50 `inferred` rows are the highest-value review target — but they are only
+**16 real judgements**. They break down as 16 company sites plus 34 handles, and
+every handle was declared on one of those same 16 sites. A handle is the company
+linking its own profile from its own page, so the site verdict settles it:
+labelling a site cascades to its handles, recorded with `derived_from`.
+
+### How to decide y or n
+
+`audit brief` fetches what a reviewer would otherwise look up by hand — the
+official registry page, the site's own contact and about pages, and whether any
+independent registry fact appears — and `audit review --briefs` prints it inline.
+
+```bash
+uv run fotavtrykk audit brief --queue out/audit/queue.jsonl \
+  --envelopes out/audit-corpus-v4.jsonl --labels out/audit/labels.jsonl \
+  --snapshots out/snapshots --output out/audit/briefs.jsonl
+
+uv run fotavtrykk audit review --queue out/audit/queue.jsonl \
+  --envelopes out/audit-corpus-v4.jsonl --labels out/audit/labels.jsonl \
+  --briefs out/audit/briefs.jsonl --tier inferred --reviewer <name>
+```
+
+Read the brief in this order:
+
+1. **`-> OURS`** on any checked page — the organisation number is on the site.
+   That is decisive. Answer `y`.
+2. **`-> OTHER <number>`** — the site identifies itself as a different legal
+   entity. Open the registry link and check whether that number is the parent.
+   If the site is the group's rather than this company's, answer `n`.
+3. **`corroborated:`** — a registry switchboard or postcode+town appears on the
+   page. Independent of the name, so `y` unless something else looks wrong.
+4. **`UNCLEAR`** — only the registry declaration and the name. Open the registry
+   link and the site side by side and decide whether the site describes *this*
+   entity or a group it belongs to.
+
+The `hint` line is a suggestion, never a label. Briefs are decision support: a
+machine cannot certify its own inference, which is the whole reason these rows
+need a person.
 
 ## How identity is decided
 

@@ -78,3 +78,30 @@ class TestFallbackTiers:
         assert (orgnr.proof_confidence(orgnr.PROOF_REGISTRY_SITE)
                 < orgnr.proof_confidence(orgnr.PROOF_CORROBORATED)
                 < orgnr.proof_confidence(orgnr.PROOF_BARE))
+
+
+class TestContactCandidates:
+    """Reviewer briefs fetch these, so duplicates cost requests and add noise."""
+
+    HTML = """<a href="/kontakt/">Kontakt</a><a href="/kontakt/#skjema">Skjema</a>
+              <a href="/kontakt">Kontakt oss</a><a href="https://annet.no/kontakt">Ekstern</a>
+              <a href="/om-oss">Om oss</a>"""
+
+    def test_fragments_and_trailing_slashes_collapse(self):
+        from fotavtrykk.audit import contact_candidates
+        found = contact_candidates(self.HTML, "https://firma.no/", limit=10)
+        assert sum("kontakt" in u and "om-oss" not in u for u in found) == 1
+
+    def test_other_hosts_are_excluded(self):
+        from fotavtrykk.audit import contact_candidates
+        assert all("annet.no" not in u for u in contact_candidates(self.HTML, "https://firma.no/", limit=10))
+
+    def test_homepage_itself_is_not_refetched(self):
+        from fotavtrykk.audit import contact_candidates
+        found = contact_candidates('<a href="/">Hjem</a>', "https://firma.no/", limit=10)
+        assert all(u.rstrip("/") != "https://firma.no" for u in found)
+
+    def test_conventional_paths_are_appended(self):
+        from fotavtrykk.audit import contact_candidates
+        found = contact_candidates("", "https://firma.no/", limit=10)
+        assert any(u.endswith("/kontakt") for u in found)

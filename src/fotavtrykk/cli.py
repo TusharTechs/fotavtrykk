@@ -97,9 +97,20 @@ def _build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--limit", type=int, help="Stop after N decisions this session")
     ar.add_argument("--relabel", nargs="+", default=[],
                     help="Observation ids to review again, overwriting their label")
+    ar.add_argument("--briefs", type=Path, help="Verification briefs from `audit brief`")
+    ar.add_argument("--no-cascade", action="store_true",
+                    help="Do not apply a site verdict to handles declared on it")
     ar.add_argument("--tier", nargs="+", default=[],
                     help="Review only these risk tiers, weakest evidence first "
                          "(inferred, corroborated, proven_on_page, primary_key)")
+
+    ab = au_sub.add_parser("brief", help="Gather verification evidence for pending rows")
+    ab.add_argument("--queue", required=True, type=Path)
+    ab.add_argument("--envelopes", required=True, type=Path, nargs="+")
+    ab.add_argument("--labels", type=Path)
+    ab.add_argument("--snapshots", type=Path)
+    ab.add_argument("--output", required=True, type=Path)
+    ab.add_argument("--request-budget", type=int, default=400)
 
     asc = au_sub.add_parser("score", help="Score observations against labels")
     asc.add_argument("--envelopes", required=True, type=Path, nargs="+")
@@ -292,6 +303,102 @@ def _audit_queue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _audit_brief(args: argparse.Namespace) -> int:
+    """Fetch what a reviewer would otherwise look up by hand, once, for all rows."""
+    import asyncio as _asyncio
+
+    from .http import Fetcher, RequestBudget
+    from .models import Observation
+    from .registry import RegistryCollector
+    from .site import SiteResolver
+
+    queue = [
+        Observation.model_validate_json(line)
+        for line in args.queue.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    labels = audit_mod.load_labels(args.labels) if args.labels else {}
+    _, envelopes = audit_mod.load_pool(args.envelopes)
+
+    # Only company sites need fetching; handles inherit their site's verdict.
+    sites = [
+        o for o in queue
+        if o.signal_type == "company_profile" and o.platform == "company_site"
+        and o.id not in labels
+    ]
+
+    async def gather() -> list[dict]:
+        budget = RequestBudget(limit=args.request_budget)
+        out: list[dict] = []
+        async with Fetcher(budget, snapshot_dir=args.snapshots) as fetcher:
+            collector = RegistryCollector(fetcher)
+
+            async def one(observation: Observation) -> dict:
+                org = observation.organisation_number
+                brief = {
+                    "id": observation.id,
+                    "organisation_number": org,
+                    "registry_lookup": audit_mod.BRREG_LOOKUP.format(org=org),
+                    "site": observation.source_url,
+                    "pages": [],
+                    "ours_found_anywhere": False,
+                    "conflicting_anywhere": [],
+                    "span": None,
+                }
+                home = await fetcher.get(observation.source_url)
+                if not home.ok:
+                    brief["error"] = home.error
+                    return brief
+
+                parsed = SiteResolver._parse(home.text)
+                summary = audit_mod.summarise_page(parsed["body_text"], org)
+                brief["pages"].append({"url": home.final_url or home.url, **summary})
+                brief["ours_found_anywhere"] |= summary["ours_found"]
+                brief["span"] = brief["span"] or summary["span"]
+                brief["conflicting_anywhere"] += summary["conflicting"]
+
+                _, entity = await collector.entity(org)
+                identity = collector.identity_bundle(entity) if entity else {}
+                corroboration = SiteResolver._corroboration(parsed, identity)
+                brief["corroborated"] = bool(corroboration)
+                brief["corroboration"] = corroboration
+
+                if not brief["ours_found_anywhere"]:
+                    for url in audit_mod.contact_candidates(home.text, home.final_url or home.url):
+                        page = await fetcher.get(url)
+                        if not page.ok:
+                            continue
+                        inner = audit_mod.summarise_page(SiteResolver._parse(page.text)["body_text"], org)
+                        brief["pages"].append({"url": page.final_url or page.url, **inner})
+                        brief["conflicting_anywhere"] += inner["conflicting"]
+                        if inner["ours_found"]:
+                            brief["ours_found_anywhere"] = True
+                            brief["span"] = inner["span"]
+                            break
+                brief["conflicting_anywhere"] = sorted(set(brief["conflicting_anywhere"]))
+                return brief
+
+            out = list(await _asyncio.gather(*(one(o) for o in sites)))
+        return out
+
+    briefs = _asyncio.run(gather())
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        "".join(json.dumps(b, ensure_ascii=False) + "\n" for b in briefs), encoding="utf-8"
+    )
+    hints: dict[str, int] = {}
+    for brief in briefs:
+        key = audit_mod.brief_hint(brief).split(" - ")[0]
+        hints[key] = hints.get(key, 0) + 1
+    print(json.dumps({
+        "sites_briefed": len(briefs),
+        "organisation_number_found_on_site": sum(1 for b in briefs if b["ours_found_anywhere"]),
+        "conflicting_number_seen": sum(1 for b in briefs if b["conflicting_anywhere"]),
+        "hints": dict(sorted(hints.items())),
+        "output": str(args.output),
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _audit_review(args: argparse.Namespace) -> int:
     """Label pending observations one at a time. Writes after every decision, so
     a session can be interrupted and resumed without losing work."""
@@ -311,10 +418,20 @@ def _audit_review(args: argparse.Namespace) -> int:
     pending = [o for o in queue if o.id not in labels]
     if args.tier:
         pending = [o for o in pending if audit_mod.risk_tier(o) in set(args.tier)]
+    # Sites first: judging one cascades to every handle declared on it, so the
+    # reviewer never decides a handle whose site is still an open question.
+    pending.sort(key=lambda o: (o.signal_type != "company_profile", o.organisation_number, o.id))
 
     if not pending:
         print(f"nothing pending: all {len(queue)} queued observations are labelled")
         return 0
+
+    briefs = {}
+    if args.briefs and args.briefs.exists():
+        for line in args.briefs.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                briefs[row["id"]] = row
 
     print(f"{len(pending)} of {len(queue)} awaiting review "
           f"({len(labels)} already labelled)\n"
@@ -329,6 +446,8 @@ def _audit_review(args: argparse.Namespace) -> int:
         print("=" * 78)
         print(f"[{index}/{len(pending)}]")
         print(audit_mod.render_for_review(observation, envelopes.get(observation.organisation_number)))
+        if observation.id in briefs:
+            print(audit_mod.render_brief(briefs[observation.id]))
         try:
             answer = input("  [y/n/m/s/q] > ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -349,6 +468,21 @@ def _audit_review(args: argparse.Namespace) -> int:
             "reviewer": args.reviewer or None,
             "risk_tier": audit_mod.risk_tier(observation),
         }
+        # A handle is the company linking its own profile from its own site, so
+        # the site verdict settles it. The person still made that one decision.
+        if not args.no_cascade and observation.signal_type == "company_profile":
+            for other in queue:
+                if (other.id not in labels
+                        and other.signal_type == "profile_handle"
+                        and other.organisation_number == observation.organisation_number
+                        and other.source_url == observation.source_url):
+                    labels[other.id] = {
+                        **labels[observation.id],
+                        "id": other.id,
+                        "risk_tier": audit_mod.risk_tier(other),
+                        "derived_from": observation.id,
+                        "basis": "handle declared on the site the reviewer judged",
+                    }
         audit_mod.write_labels(args.labels, labels)  # crash-safe: persist each decision
         decided += 1
 
@@ -379,6 +513,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "audit":
         if args.audit_command == "queue":
             return _audit_queue(args)
+        if args.audit_command == "brief":
+            return _audit_brief(args)
         if args.audit_command == "review":
             return _audit_review(args)
         return _audit_score(args)

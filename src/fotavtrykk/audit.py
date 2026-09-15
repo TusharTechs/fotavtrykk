@@ -31,10 +31,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urldefrag, urljoin, urlparse
 
 from .models import Envelope, Observation, publishable, validate_observation
 
@@ -311,3 +313,78 @@ def score_audit(
             "of every risky observation."
         ),
     }
+
+
+# --- verification briefs --------------------------------------------------
+# What a reviewer would otherwise gather by hand: the official registry page,
+# what the site says about itself one click deeper, and whether any independent
+# registry fact appears. Decision support only -- the person still decides.
+
+BRREG_LOOKUP = "https://virksomhet.brreg.no/nb/oppslag/enheter/{org}"
+
+CONTACT_HINT = re.compile(r"kontakt|om.?oss|about|contact|personvern|impressum", re.I)
+CONTACT_PATHS = ("/kontakt", "/om-oss", "/contact", "/about")
+
+
+def contact_candidates(homepage_html: str, base: str, limit: int = 3) -> list[str]:
+    """Same-host pages most likely to carry an organisation number."""
+    from selectolax.parser import HTMLParser
+
+    host = (urlparse(base).hostname or "").removeprefix("www.")
+    found: list[str] = []
+    for anchor in HTMLParser(homepage_html or "").css("a[href]"):
+        href = anchor.attributes.get("href") or ""
+        label = anchor.text(strip=True) or ""
+        if not href or not (CONTACT_HINT.search(href) or CONTACT_HINT.search(label)):
+            continue
+        absolute = urljoin(base, href)
+        if (urlparse(absolute).hostname or "").removeprefix("www.") == host:
+            found.append(absolute)
+    found += [urljoin(base, path) for path in CONTACT_PATHS]
+
+    # A fragment is the same page, and a trailing slash is the same page. Both
+    # would otherwise burn a request and clutter the reviewer's brief.
+    seen: dict[str, str] = {}
+    for url in found:
+        key = urldefrag(url)[0].rstrip("/").casefold()
+        if key and key != urldefrag(base)[0].rstrip("/").casefold() and key not in seen:
+            seen[key] = urldefrag(url)[0]
+    return list(seen.values())[:limit]
+
+
+def summarise_page(text: str, org: str) -> dict[str, Any]:
+    from . import orgnr
+
+    proof, span = orgnr.find_org_number_proof(text, org)
+    return {
+        "ours_found": bool(proof),
+        "proof": proof or None,
+        "span": span,
+        "conflicting": orgnr.find_conflicting_org_numbers(text, org),
+    }
+
+
+def brief_hint(brief: dict[str, Any]) -> str:
+    """A suggestion, never a label. The reviewer overrides it freely."""
+    if brief.get("ours_found_anywhere"):
+        return "likely YES - the organisation number appears on the site"
+    if brief.get("conflicting_anywhere"):
+        return "CHECK CAREFULLY - the site shows a different organisation number"
+    if brief.get("corroborated"):
+        return "likely YES - a registry address or phone matches, no conflict found"
+    return "UNCLEAR - only the registry declaration and the name match"
+
+
+def render_brief(brief: dict[str, Any]) -> str:
+    lines = [
+        "  verify at   : " + brief["registry_lookup"],
+        "  site        : " + str(brief.get("site")),
+    ]
+    for page in brief.get("pages", []):
+        mark = "OURS" if page["ours_found"] else ("OTHER " + ",".join(page["conflicting"]) if page["conflicting"] else "none")
+        lines.append(f"  checked     : {page['url'][:62]}  -> {mark}")
+    if brief.get("span"):
+        lines.append(f"  found       : {brief['span'][:160]}")
+    lines.append(f"  corroborated: {brief.get('corroboration') or 'no independent registry fact on the page'}")
+    lines.append(f"  hint        : {brief_hint(brief)}")
+    return "\n".join(lines)
