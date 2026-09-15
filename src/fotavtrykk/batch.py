@@ -11,6 +11,7 @@ import asyncio
 import time
 from pathlib import Path
 
+from .diff import reconcile
 from .http import CostLedger, Fetcher, RequestBudget, start_call_counter, utc_now
 from .models import (
     Availability, Claim, Envelope, Evidence, Observation, Operations, RunInfo,
@@ -25,9 +26,13 @@ RESERVE_FRACTION = 0.05
 
 
 class CompanyRunner:
-    def __init__(self, fetcher: Fetcher, run_id: str) -> None:
+    def __init__(
+        self, fetcher: Fetcher, run_id: str,
+        previous: dict[str, "Envelope"] | None = None,
+    ) -> None:
         self.fetcher = fetcher
         self.run_id = run_id
+        self.previous = previous or {}
         self.registry = RegistryCollector(fetcher)
         self.site = SiteResolver(fetcher)
 
@@ -90,6 +95,15 @@ class CompanyRunner:
                     confidence=0.0, note="runner raised before any claim was produced",
                 ))
 
+        claims, changes, carried = reconcile(self.previous.get(org), Envelope(
+            organisation_number=org,
+            run=RunInfo(run_id=self.run_id, started_at=started, completed_at=utc_now(),
+                        terminal_status=status),
+            claims=sorted(claims, key=lambda c: c.field),
+            evidence=evidence,
+        ))
+        evidence = evidence + [e for e in carried if e.id not in {x.id for x in evidence}]
+
         return Envelope(
             organisation_number=org,
             run=RunInfo(
@@ -97,9 +111,10 @@ class CompanyRunner:
                 terminal_status=status,
             ),
             legal_identity=self._identity_summary(org, claims),
-            claims=sorted(claims, key=lambda c: c.field),
+            claims=claims,
             evidence=evidence,
             observations=observations,
+            changes=changes,
             errors=errors,
             operations=Operations(
                 requests=calls.requests,
@@ -145,6 +160,7 @@ async def run_batch(
     snapshot_dir: Path | None = None,
     concurrency: int = 8,
     cost_limit_usd: float = 10.0,
+    previous: dict[str, Envelope] | None = None,
 ) -> tuple[list[Envelope], dict]:
     budget = RequestBudget(limit=request_budget)
     ledger = CostLedger(limit_usd=cost_limit_usd)
@@ -153,7 +169,7 @@ async def run_batch(
     envelopes: dict[str, Envelope] = {}
 
     async with Fetcher(budget, snapshot_dir=snapshot_dir) as fetcher:
-        runner = CompanyRunner(fetcher, run_id)
+        runner = CompanyRunner(fetcher, run_id, previous=previous)
 
         async def guarded(org: str) -> None:
             async with gate:
@@ -180,6 +196,11 @@ async def run_batch(
         "p50_ms": _percentile([e.operations.runtime_ms for e in ordered], 50),
         "p95_ms": _percentile([e.operations.runtime_ms for e in ordered], 95),
         "observations": sum(len(e.observations) for e in ordered),
+        "changes": sum(len(e.changes) for e in ordered),
+        "material_changes": sum(
+            1 for e in ordered for c in e.changes if c.materiality == "material"
+        ),
+        "refreshed_against_previous": bool(previous),
         "validation": {
             "passed": len(ordered) == len(organisations)
             and all(e.organisation_number for e in ordered)

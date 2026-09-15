@@ -118,17 +118,30 @@ class Observation(BaseModel):
 
 
 class Change(BaseModel):
+    """One material difference between two runs.
+
+    Carries evidence for *both* sides: the playbook requires that a refresh
+    expose "sources supporting both sides of the change", not just the new one.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     organisation_number: str
     field: str
     change_type: str
+    materiality: str = "material"
     old_value: Any = None
     new_value: Any = None
-    source_url: str | None = None
-    retrieved_at: str | None = None
+    old_availability: str | None = None
+    new_availability: str | None = None
+    old_source_url: str | None = None
+    new_source_url: str | None = None
+    old_retrieved_at: str | None = None
+    new_retrieved_at: str | None = None
     old_content_sha256: str | None = None
     new_content_sha256: str | None = None
+    reporting_period: str | None = None
+    note: str | None = None
 
 
 class RunInfo(BaseModel):

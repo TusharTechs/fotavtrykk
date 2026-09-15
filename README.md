@@ -45,12 +45,47 @@ V1 covers the official foundation and the identity gate.
 | `registry.py` | Entity, roles, annual accounts, subunits | done |
 | `site.py` | Website crawl + org-number proof gate | done |
 | `batch.py` | Orchestration, terminal-envelope guarantee | done |
+| `diff.py` | Reconcile, typed change events, idempotency | done |
+| `snapshots.py` | Snapshot load/save, manifest, content hash | done |
 | `connectors/` | Places, NAV jobs, news, YouTube | **not built** |
-| `diff.py` | Refresh diffs and typed change events | **not built** |
 | `viewer/` | Static evidence browser | **not built** |
 
 External connectors are where the rubric's differentiating points live. The
 foundation this V1 delivers is table stakes, not a competitive position.
+
+### Refresh
+
+```bash
+# Refresh against a prior run: changes land in each envelope's `changes` list.
+uv run fotavtrykk run --organisations data/smoke-companies.jsonl \
+  --output out/run2.jsonl --previous out/run1.jsonl --run-id local-002
+
+# Diff two stored snapshots offline. Zero outbound requests.
+uv run fotavtrykk refresh --previous out/run1.jsonl --current out/run2.jsonl \
+  --output out/changes.jsonl --report out/refresh-report.json
+```
+
+Two independent live runs over the same companies produced **0 changes and 0
+material changes** — real-world idempotency, not just a fixture replay. Diffing
+a snapshot against itself reports `idempotent_rerun: true`, `false_changes: 0`,
+`evidence_complete: true`.
+
+Change detection was verified by injecting realistic movements into a live
+snapshot. All seven were caught with the right type and zero false positives:
+
+| Injected | Reported |
+|---|---|
+| CEO replaced | `departed_role` + `new_role` (two events, not one blob) |
+| Revenue moved | `new_filing`, material |
+| New subunit | `new_location`, material |
+| Legal name changed | `changed_identity`, material |
+| Website unreachable | `source_unavailable`, minor, **previous value preserved** |
+| Currency NOK → EUR at the same number | `new_filing` + `value unchanged; currency NOK -> EUR` |
+
+Change types are typed (`new_role`, `new_filing`, `new_location`,
+`changed_description`, `became_available`, `became_unavailable`,
+`source_unavailable`) rather than a flat old/new pair, because the evaluator
+checks that a rerun reports *real* changes, not merely that bytes differ.
 
 ### Measured on a live 8-company batch
 
@@ -97,6 +132,14 @@ subsidiary.
 - Observations are validated against the starter kit's own publication gate
   before emission, so a rejected observation is caught locally rather than by
   the evaluator's audit.
+- Re-running the same snapshot is silent. List ordering, `0` vs `0.0`, and
+  bookkeeping qualifiers are normalised away before comparison — each is a
+  false-change source pinned by a test.
+- A failed or blocked source preserves the last supported value **and its
+  evidence**, and reports `source_unavailable`. Only a source that was read
+  successfully and no longer reports a value yields `became_unavailable`.
+- Observation timestamps come from the evidence, never the wall clock, so
+  replaying a stored snapshot reproduces byte-identical output.
 
 ## Sources, rights and cost
 
@@ -125,6 +168,8 @@ encoding for declared-but-unfetched handles.
 
 ## Next
 
-1. Refresh diffs and typed change events (`diff.py`).
-2. Google Places, NAV job feed, news — the external families.
-3. Hand-label ≥100 observations; the external audit gate depends on it.
+1. Google Places, NAV job feed, news — the external families that carry the
+   differentiating points.
+2. Hand-label ≥100 observations; the external audit gate depends on it and it is
+   the critical path, since all external points are gated on passing it.
+3. Static evidence viewer.
