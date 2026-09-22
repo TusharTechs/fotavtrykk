@@ -1,0 +1,18 @@
+{
+  "scorer": "fotavtrykk_refresh_replay_v1",
+  "previous_profiles": 150,
+  "current_profiles": 150,
+  "profiles_fetched_this_run": 0,
+  "changes": 4,
+  "material_changes": 1,
+  "change_types": {
+    "availability_changed": 3,
+    "value_changed": 1
+  },
+  "false_changes": 0,
+  "idempotent_rerun": true,
+  "evidence_complete": true,
+  "dropped_organisations": [],
+  "preserved_on_failure": 0,
+  "qualification_passed": true
+}

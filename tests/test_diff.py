@@ -335,3 +335,32 @@ class TestRepresentativeSampling:
         picked = select_risk_weighted(self._universe(), 50, seed="t", website_fraction=0.6)
         share = sum(1 for r in picked if r.get("website")) / len(picked)
         assert abs(share - 0.6) < 0.1, share
+
+
+class TestAvailabilityOnlyTransitions:
+    """A state move with no value either side is not a value change."""
+
+    def test_blocked_to_ambiguous_is_an_availability_change(self):
+        before = envelope([claim("website_description", None, Availability.BLOCKED)])
+        after = envelope([claim("website_description", None, Availability.AMBIGUOUS)])
+        _, changes, _ = reconcile(before, after)
+        assert [c.change_type for c in changes] == ["availability_changed"]
+        assert changes[0].materiality == "minor"
+        assert "no value on either side" in changes[0].note
+
+    def test_it_does_not_masquerade_as_a_description_change(self):
+        before = envelope([claim("website_title", None, Availability.BLOCKED)])
+        after = envelope([claim("website_title", None, Availability.AMBIGUOUS)])
+        _, changes, _ = reconcile(before, after)
+        assert changes[0].change_type != "changed_description"
+
+    def test_a_real_value_change_is_still_classified_by_field(self):
+        before = envelope([claim("website_description", "Gammel")])
+        after = envelope([claim("website_description", "Ny")])
+        _, changes, _ = reconcile(before, after)
+        assert changes[0].change_type == "changed_description"
+
+    def test_identical_state_and_value_stays_silent(self):
+        env = envelope([claim("website_title", None, Availability.BLOCKED)])
+        _, changes, _ = reconcile(env, env)
+        assert changes == []

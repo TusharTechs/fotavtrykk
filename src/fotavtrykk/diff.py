@@ -215,6 +215,15 @@ def _classify(
                        old_value=before.value, new_value=None,
                        note="source was read successfully and no longer reports this value")]
 
+    # Neither side published a value, so this is a state transition, not a value
+    # change. Calling it `changed_description` reads as a false change to a
+    # reviewer when nothing about the description moved.
+    if before.value is None and after.value is None:
+        return [Change(**base, change_type="availability_changed", materiality="minor",
+                       old_value=None, new_value=None,
+                       note=f"no value on either side; source state moved from "
+                            f"{before.availability} to {after.availability}")]
+
     if after.field in LIST_KEYS:
         item_changes = _list_changes(after.field, before.value, after.value, base)
         if item_changes:
