@@ -128,11 +128,37 @@ correct.
 
 ## Verification status
 
-**The blind-label audit is incomplete.** 100 machine-verified labels exist,
-covering only primary-key registry lookups, which are tautological by
-construction. **No risky observation has been adjudicated by a person**, so the
-scorer reports `qualification_passed: false`. Its `entity_precision: 1.0` is
-therefore a statement about registry lookups and nothing else.
+**180 labels, 0 wrong-entity publications, `entity_precision: 1.0`** — but read
+the provenance before reading the number.
+
+| provenance | labels | what it covers |
+|---|---:|---|
+| `machine` | 100 | primary-key registry lookups, re-read from the stored payload |
+| `assisted` | 80 | risky roots adjudicated from evidence, and their cascades |
+| `human` | **0** | — |
+
+Both risky root classes were checked one by one:
+
+- **21 website `corroborated` roots** — every one resolved to the company's own
+  domain (Norske Skog, Scana, TOMRA, Yara, Borregaard, Polaris Media, Navamedic
+  …). 14 were confirmed by the registry switchboard appearing on the page, 7 by
+  postcode and town. Unlike the withdrawn Places proof, that address check sits
+  *on top of* a registry-declared website and a full legal-name match, so it is
+  corroboration rather than the sole signal.
+- **42 Wikidata roots** — all reconciled. The single label mismatch,
+  `VERDIPAPIRSENTRALEN ASA` against Wikidata's `Euronext VPS`, resolved as a
+  rebrand: Brreg's own record lists `hjemmeside: www.euronext.com` for that
+  organisation number. P2333 matching survived a rename that name matching would
+  have missed.
+
+These 63 roots cascade to the `declared` tier, which is why 38 dependents were
+settled by them.
+
+**`qualification_passed` stays `false`, and should.** Assisted labels are
+adjudication by something other than the gate that produced the observation —
+real signal, not certification. Only a person's verdict counts toward the gate,
+and 0 rows have one. `provisional_qualification: true` is what the kit's
+evaluator would conclude from these labels; it is deliberately the weaker claim.
 
 Even when the queue is complete, ~100 clean labels bound the error rate at
 roughly 3% with 95% confidence, not 0.5%. Demonstrating a 99.5% floor
