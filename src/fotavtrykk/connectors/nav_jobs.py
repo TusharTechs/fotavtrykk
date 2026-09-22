@@ -39,9 +39,18 @@ FEED_URL = f"{FEED_BASE}/api/v1/feed"
 PUBLIC_TOKEN_URL = f"{FEED_BASE}/api/publicToken"
 TERMS_URL = "https://arbeidsplassen.nav.no/vilkar-api"
 
-DEFAULT_WINDOW_DAYS = 30
-DEFAULT_MAX_PAGES = 25
-DEFAULT_MAX_ADS = 60
+# The feed is a changelog, so a window only surfaces adverts *modified* inside
+# it. An advert published 45 days ago and still open never appears in a 30-day
+# walk. Measured against Norway's ~13,500 active adverts:
+#   30 days / 25 pages -> 6,587 distinct active seen (48.8%)
+#   60 days / 50 pages -> 13,359                     (99.0%)
+#  120 days / 100 pages -> no further gain, just re-modified duplicates
+# 51 requests for near-total visibility is cheap against a 2,000 cap, and job
+# coverage is scored as recall against the companies that *have* a posting, so
+# a missed advert costs far more than a spent request.
+DEFAULT_WINDOW_DAYS = 60
+DEFAULT_MAX_PAGES = 50
+DEFAULT_MAX_ADS = 150
 FEED_TIMEOUT = 30.0  # feed pages are ~500KB, unlike the homepages the default targets
 
 
@@ -109,20 +118,41 @@ class NavJobsSource:
                 if not tokens:
                     continue
                 for org, want in wanted.items():
-                    # Loose on purpose: this only selects what to verify.
-                    if want and want.issubset(tokens):
-                        candidates.append({"org": org, "url": item.get("url"), "entry": entry})
-                        break
+                    # Loose on purpose: this only selects what to verify. But a
+                    # single generic token ("holding", "gruppen") matches half of
+                    # Norway, so score the match and let the good ones sort first.
+                    if not want or not want.issubset(tokens):
+                        continue
+                    # The feed's ACTIVE flag is the status at the time of that
+                    # changelog event, not now: sampling 40 entries marked
+                    # ACTIVE, 39 came back INACTIVE from the detail endpoint,
+                    # which masks `employer` on inactive ads. So rank by how
+                    # recently the advert changed -- the freshest are the ones
+                    # most likely still open -- and let an exact name match win
+                    # ties. This spends the fetch budget where it can resolve.
+                    exact = want == tokens
+                    score = (2 if exact else 1, str(entry.get("sistEndret") or ""))
+                    candidates.append({
+                        "org": org, "url": item.get("url"), "entry": entry, "score": score,
+                    })
+                    break
 
             nxt = payload.get("next_url")
             url = f"{FEED_BASE}{nxt}" if nxt else None
 
+        # Dedupe *then* truncate, best match first. Truncating raw feed order
+        # starved real matches behind hundreds of single-token collisions --
+        # measured as 653 candidates collapsing to 79 fetches and 0 resolved.
+        ranked: dict[str, dict[str, Any]] = {}
+        for candidate in sorted(candidates, key=lambda c: c["score"], reverse=True):
+            path = candidate["url"]
+            if path and path not in ranked:
+                ranked[path] = candidate
+
         seen: set[str] = set()
         resolved = 0
-        for candidate in candidates[:max_ads]:
+        for candidate in list(ranked.values())[:max_ads]:
             path = candidate["url"]
-            if not path or path in seen:
-                continue
             seen.add(path)
             detail = await self.fetcher.get(
                 f"{FEED_BASE}{path}", accept="application/json",
@@ -158,8 +188,10 @@ class NavJobsSource:
         self.stats = {
             "pages_walked": pages,
             "active_candidates": len(candidates),
+            "distinct_candidates": len(ranked),
             "adverts_fetched": len(seen),
             "adverts_resolved": resolved,
+            "adverts_expired_or_masked": len(seen) - resolved,
             "companies_with_jobs": len(self.by_org),
             "window_days": window_days,
         }

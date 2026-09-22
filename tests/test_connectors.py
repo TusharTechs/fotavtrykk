@@ -408,3 +408,43 @@ class TestHostConcurrency:
             assert a is b
             assert a is not c
             assert c._value == 2
+
+
+class TestNavFeedWindow:
+    """A 30-day window saw 48.8% of active adverts; 60 days sees 99.0%."""
+
+    def test_window_covers_the_active_advert_population(self):
+        from fotavtrykk.connectors.nav_jobs import DEFAULT_MAX_PAGES, DEFAULT_WINDOW_DAYS
+        assert DEFAULT_WINDOW_DAYS >= 60
+        assert DEFAULT_MAX_PAGES >= 50
+
+    def test_ad_budget_can_absorb_the_wider_window(self):
+        from fotavtrykk.connectors.nav_jobs import DEFAULT_MAX_ADS
+        assert DEFAULT_MAX_ADS >= 150
+
+
+class TestNavStaleStatus:
+    """The feed's ACTIVE flag is the status at changelog time, not now."""
+
+    async def test_masked_employer_is_never_published(self):
+        from fotavtrykk.connectors import NavJobsSource
+        # An expired advert: NAV masks employer, so there is no orgnr to match.
+        f = StubFetcher({"publicToken": "token eyJa.eyJb.eyJc",
+                         "feedentry": {"status": "INACTIVE", "ad_content": {}},
+                         "/api/v1/feed": feed_page("NORDLYS VERKSTED AS")})
+        src = NavJobsSource(f)
+        await src.prime([("987654321", "NORDLYS VERKSTED AS")])
+        claims, _, observations = src.collect("987654321")
+        assert observations == []
+        count = next(c for c in claims if c.field == "jobs.active_count")
+        assert count.value == 0
+        assert count.availability is Availability.AVAILABLE
+
+    async def test_expired_adverts_are_counted_in_stats(self):
+        from fotavtrykk.connectors import NavJobsSource
+        f = StubFetcher({"publicToken": "token eyJa.eyJb.eyJc",
+                         "feedentry": {"status": "INACTIVE", "ad_content": {}},
+                         "/api/v1/feed": feed_page("NORDLYS VERKSTED AS")})
+        src = NavJobsSource(f)
+        await src.prime([("987654321", "NORDLYS VERKSTED AS")])
+        assert src.stats["adverts_expired_or_masked"] >= 1

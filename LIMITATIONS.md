@@ -18,11 +18,27 @@ audit nothing falsifiable. That makes it the right population for precision and
 **the wrong one for quoting coverage**. Coverage numbers below come from the
 representative 1,000 unless stated.
 
+## How to read the coverage numbers below
+
+Coverage is scored as recall **against Builderr's checked collection**, not
+against the universe: 70% company recall (of the companies that have a verified
+fact of this type, how many did you cover) plus 30% fact recall (of the
+individual facts, how many did you find).
+
+The percentages in the next table are **population reach** — the share of *all*
+companies where we found the fact. That is a different, harsher number, and it
+is the one we can measure locally because the checked collection is not visible
+to us. A family where few companies have the fact at all will show a tiny
+population reach and could still score well on recall, or be reported as *not
+measured* if the collection holds no verified positive either.
+
+Read them as a floor on effort, not as an estimate of the score.
+
 ## Coverage that is structurally capped
 
 | family | weight | representative coverage | why |
 |---|---:|---:|---|
-| `workforce_jobs` | 7 pts | **0.0%** | Norway has ~13,500 active job adverts against 411,160 companies in the universe. The absolute ceiling is ~3.3% and realistically 1–2%. Measured: 32 name candidates across 150 companies over a 75-day window, 10 fetched, 0 verified. |
+| `workforce_jobs` | 7 pts | **0.0%** | Norway has ~13,500 active adverts against 411,160 companies. Investigated properly: 8 of our 1,000 match an advertiser by name, but every one of those adverts had already expired, and NAV masks `employer` on an inactive advert — so there is no organisation number to verify against and the gate correctly refuses to publish. 0 is the true answer for this sample, not a miss. |
 | `buzz_engagement` | 7 pts | **0.6%** | Only reachable through a company's own dated news page, which requires a verified website — and 89.5% of the universe has none. |
 | `ratings_reviews` | 8 pts | **38.6%** | Requires a Google Places listing tied to the entity by an independent registry fact. Dormant holding and property companies have no premises and no listing. |
 | `two_platforms` | 10 pts | **39.3%** | Same ceiling: most of the universe has no external footprint of any kind. |
