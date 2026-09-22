@@ -131,6 +131,17 @@ class TestPlaces:
         _, _, observations = await src.collect("987654321", "NORDLYS VERKSTED AS", IDENTITY)
         assert observations[0].identity_proof == "places_phone_matches_registry"
 
+    async def test_address_only_match_is_rejected(self):
+        """Postcode+town covers a whole district and conflates landlord with
+        tenant. Sampled at ~55% precision; removed."""
+        f = StubFetcher({"searchText": {"places": [place(
+            websiteUri=None, nationalPhoneNumber=None,
+            formattedAddress="Storgata 1, 9008 Tromsø, Norge")]}})
+        src = PlacesSource(f, api_key="k")
+        claims, _, observations = await src.collect("987654321", "NORDLYS VERKSTED AS", IDENTITY)
+        assert observations == []
+        assert claims[0].availability is Availability.AMBIGUOUS
+
     async def test_name_only_match_is_rejected(self):
         """A place with the right name but no registry agreement is ambiguous."""
         f = StubFetcher({"searchText": {"places": [place(

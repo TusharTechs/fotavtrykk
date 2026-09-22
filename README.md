@@ -418,16 +418,23 @@ returns `not_available` with a reason at zero cost — never a fabricated blank.
 Places matches on text, so results are candidates. A place is published only
 when an **independent registry fact agrees**. Measured across 150 companies:
 
-| proof | places |
-|---|---:|
-| `places_website_matches_verified_domain` | 59 |
-| `places_address_matches_registry` | 36 |
-| `places_phone_matches_registry` | 18 |
-| **published** | **113 of 150 (75%)** |
+| proof | belongs to | kept? |
+|---|---|---|
+| `places_website_matches_verified_domain` | an entity | yes |
+| `places_phone_matches_registry` | an entity | yes |
+| ~~`places_address_matches_registry`~~ | **a building** | **withdrawn** |
 
-84 of those 113 carry an actual rating; the rest are real places Google holds no
-rating for, which is reported as `not_available` with a reason rather than a
-zero.
+Address matching was removed after spot-checking it at roughly **55%
+exact-entity precision**. Matching on postcode and town covers a whole village
+or city district, and it structurally conflates a landlord with its tenants:
+HØYRES STORTINGSGRUPPE matched the parliament *building* (4.4 from 616
+ratings), and HVAMSVINGEN 4 ANS — a property partnership named after its own
+address — matched whatever business occupies it. Tightening to the street would
+not help, because a landlord and a tenant share a street address by definition.
+
+Publication fell from 75% to **45%** of the audit corpus as a result. That is the
+correct trade against a 95% precision floor where a material wrong-company
+publication fails the entry outright.
 
 **Cost, priced against the published list rather than guessed.** Text Search
 **Enterprise** is $35/1,000 — $0.035 per search — and that is the tier carrying

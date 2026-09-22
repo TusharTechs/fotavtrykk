@@ -1003,5 +1003,6 @@
     "979876106"
   ],
   "count": 1000,
-  "content_sha256": "10088438140b49d3d08f0f4f04066370b523a5daf404095a80ee39f7fd46310f"
+  "content_sha256": "78f1e6dc18f6d73fc6a0541ca1850116b884dd043577b1f98173b9b258208f59",
+  "note": "places_address_matches_registry observations withdrawn after spot-check measured that proof at ~55% exact-entity precision"
 }

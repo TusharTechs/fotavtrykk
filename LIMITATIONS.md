@@ -93,11 +93,23 @@ organisation-number match, so entity resolution is exact — but the social
 handles and sitelinks hanging off an entity are only as good as the editor who
 added them. They are published as `declared`, never as proven.
 
-**Corroboration is not proof.** `registry_site_corroborated` means a registry
-postcode+town or switchboard number appears on the page. A shared office
-building or a switchboard listed for a group could in principle corroborate the
-wrong entity. Measured at 56% of registry-declared sites; not yet audited by a
-human.
+**Corroboration is not proof, and one form of it failed.** Spot-checking the
+Google Places proofs found `places_address_matches_registry` matching on
+postcode and town only — which in Norway covers a whole village or city
+district, and structurally conflates a landlord with its tenants. Real results:
+HØYRES STORTINGSGRUPPE matched the parliament *building* (4.4 from 616
+ratings); HVAMSVINGEN 4 ANS, a property partnership named after its address,
+matched whatever business occupies it; GELATO ASA matched a place in a
+multi-tenant office tower. About 6 of 11 sampled were wrong — ~55% against a 95%
+floor — so that proof was removed. Tightening it to the street would not help:
+a landlord and its tenant share a street address by definition.
+
+Places now publishes only on a **verified domain** or a **registry switchboard
+match**, both of which belong to an entity rather than to a building.
+
+`registry_site_corroborated` on company websites survives — the postcode+town
+there is corroboration *on top of* a full legal-name match on a site the
+registry itself declares, not a match on its own. It is still not human-audited.
 
 **TLS verification is relaxed on a documented fallback.** Some Norwegian sites
 serve an incomplete certificate chain; a browser recovers the missing

@@ -15,10 +15,10 @@ match is the tier already measured at 84% precision and dropped, so a place is
 published only when an independent registry fact agrees:
 
   * the place's website resolves to the same registered domain we verified, or
-  * its phone number matches the registry switchboard, or
-  * its address carries the registry postcode and town.
+  * its phone number matches the registry switchboard.
 
-Otherwise the place is discarded. No key configured means `not_available` at
+Address matching was tried and removed: see PROOF_ADDRESS below. Otherwise the
+place is discarded. No key configured means `not_available` at
 zero cost — never a fabricated blank.
 """
 
@@ -55,7 +55,19 @@ ESTIMATED_COST_PER_SEARCH_USD = 0.035
 
 PROOF_DOMAIN = "places_website_matches_verified_domain"
 PROOF_PHONE = "places_phone_matches_registry"
-PROOF_ADDRESS = "places_address_matches_registry"
+
+# `places_address_matches_registry` was removed after spot-checking it.
+# It matched on postcode + town, which in Norway can cover a whole village or a
+# city district, and it conflates a landlord with its tenants. Real results:
+#   HØYRES STORTINGSGRUPPE  -> "Stortingsbygningen", the parliament building
+#   HVAMSVINGEN 4 ANS       -> a property partnership named after its address,
+#                              matched to whatever business occupies it
+#   GELATO ASA              -> a multi-tenant office tower in Barcode
+#   SANDVIK INTERIØR ANS    -> registry "Rute 511" vs place "Framgutua 27"
+# Roughly 6 of 11 sampled were wrong: ~55% against a 95% floor. Tightening to
+# the street would not save it, because a landlord and its tenant share a
+# street address by definition. A domain and a phone number belong to an
+# entity; an address belongs to a building.
 
 
 def _host(url: str | None) -> str:
@@ -177,9 +189,8 @@ class PlacesSource:
     def _verify(
         self, places: list[dict[str, Any]], identity: dict[str, Any], verified_domain: str | None
     ) -> tuple[dict[str, Any] | None, str, str | None]:
-        """Strongest independent agreement wins; name similarity is never enough."""
+        """An entity-specific match, or nothing. A shared address is not one."""
         registry_phone = _digits(identity.get("phone"))
-        postcode, city = identity.get("postcode"), (identity.get("city") or "")
 
         for place in places:
             if verified_domain and _host(place.get("websiteUri")) == _host(verified_domain):
@@ -190,13 +201,6 @@ class PlacesSource:
                 for field in ("nationalPhoneNumber", "internationalPhoneNumber"):
                     if _digits(place.get(field)).endswith(registry_phone[-8:]):
                         return place, PROOF_PHONE, f"place phone {place.get(field)} matches the registry switchboard"
-
-        if postcode and city:
-            lowered_city = re.sub(r"\s+[a-zæøå]$", "", city.casefold()).strip()
-            for place in places:
-                address = place.get("formattedAddress") or ""
-                if postcode in address and lowered_city and lowered_city in address.casefold():
-                    return place, PROOF_ADDRESS, f"place address '{address}' carries the registry postcode and town"
 
         return None, "", None
 
